@@ -154,3 +154,21 @@ extension Records {
         return item.isUnread && items[item.id] == nil
     }
 }
+
+extension Records {
+    /// Whether the node holds a message the user wrote to `peer` with `text`, under an id past
+    /// `after`. A send the node never answered for may have reached it all the same; once a sync
+    /// shows it did, it is not sent again. The node knows a `SEND`'s `ref` only among its last
+    /// `Companion.refs` messages, so this, not the `ref`, is what keeps a late retry from sending
+    /// twice.
+    public func holdsSent(_ text: String, to peer: Peer, after: UInt32) -> Bool {
+        items.values.contains { item in
+            guard item.id > after, item.peer == peer, !item.isReceived else { return false }
+            switch item {
+            case let .message(m): return m.text == text
+            case let .groupMessage(m): return m.text == text
+            case .invite: return false
+            }
+        }
+    }
+}

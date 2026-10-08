@@ -113,6 +113,16 @@ final class ConversationsTests: XCTestCase {
 
     // MARK: Words
 
+    /// An unanswered send that reached the node is found in a sync, and not sent again.
+    func testASendTheNodeHoldsIsFound() {
+        let r = records([message(4, Self.bob, received: false), message(5, Self.carol), groupMessage(6, Self.hut, from: 0)])
+        XCTAssertTrue(r.holdsSent("m4", to: .contact(Self.bob), after: 3))
+        XCTAssertFalse(r.holdsSent("m4", to: .contact(Self.bob), after: 4), "written before the send")
+        XCTAssertFalse(r.holdsSent("m4", to: .contact(Self.carol), after: 3), "to someone else")
+        XCTAssertFalse(r.holdsSent("m5", to: .contact(Self.carol), after: 3), "received, not sent")
+        XCTAssertTrue(r.holdsSent("g6", to: .group(Self.hut), after: 0))
+    }
+
     func testWords() {
         XCTAssertEqual(Words.waiting(reason: 0, wait: 0), "Waiting")
         XCTAssertEqual(Words.waiting(reason: 1, wait: 0), "Waiting: looking for a route")

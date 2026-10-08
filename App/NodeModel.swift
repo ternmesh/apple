@@ -25,6 +25,9 @@ struct Outgoing: Identifiable, Equatable {
     var peer: Peer
     var text: String
     var status: Status
+    /// The greatest id the app held when it was first sent: a message the node holds past it, to
+    /// the same peer with the same text, is this one, and it went.
+    var after: UInt32 = 0
 }
 
 /// Someone not in the contacts tried to reach the node, and was refused.
@@ -152,7 +155,7 @@ final class NodeModel: ObservableObject {
     /// Sends `text` to the conversation `peer`, under a new `ref`.
     func send(_ text: String, to peer: Peer) {
         let ref = UInt32.random(in: 1...UInt32.max)
-        outgoing.append(Outgoing(ref: ref, peer: peer, text: text, status: .sending))
+        outgoing.append(Outgoing(ref: ref, peer: peer, text: text, status: .sending, after: records.greatest))
         transmit(ref)
     }
 
@@ -160,6 +163,8 @@ final class NodeModel: ObservableObject {
     /// of the first try.
     func resend(_ o: Outgoing) {
         guard let i = outgoing.firstIndex(where: { $0.ref == o.ref }) else { return }
+        // The node holds it: it went, and the ref may since have left the node's memory.
+        if records.holdsSent(o.text, to: o.peer, after: o.after) { return discard(o) }
         outgoing[i].status = .sending
         transmit(o.ref)
     }
@@ -277,6 +282,11 @@ final class NodeModel: ObservableObject {
         guard let c = link.connection else { return }
         records = c.records
         conversations = records.conversations
+        // An unanswered send that the records now show the node holding went: it needs no retry.
+        let records = self.records
+        if outgoing.contains(where: { $0.status == .unanswered && records.holdsSent($0.text, to: $0.peer, after: $0.after) }) {
+            outgoing.removeAll { $0.status == .unanswered && records.holdsSent($0.text, to: $0.peer, after: $0.after) }
+        }
         markRead()
     }
 
@@ -332,7 +342,7 @@ final class NodeModel: ObservableObject {
             case let .contact(a): peer = "c:\(a)"
             case let .group(g): peer = "g:\(g)"
             }
-            return ["ref": String(o.ref), "peer": peer, "text": o.text]
+            return ["ref": String(o.ref), "peer": peer, "text": o.text, "after": String(o.after)]
         }
         UserDefaults.standard.set(kept, forKey: Self.outgoingKey(id))
     }
@@ -382,7 +392,8 @@ final class NodeModel: ObservableObject {
             } else {
                 peer = nil
             }
-            return peer.map { Outgoing(ref: ref, peer: $0, text: text, status: .unanswered) }
+            let after = d["after"].flatMap(UInt32.init) ?? 0
+            return peer.map { Outgoing(ref: ref, peer: $0, text: text, status: .unanswered, after: after) }
         }
     }
 
