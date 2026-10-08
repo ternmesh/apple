@@ -187,16 +187,7 @@ public final class Connection {
         let t = now()
         if let f = inFlight {
             guard t >= f.deadline else { return }
-            // Everything is cleared, and the app told, before any request's callback runs: an app
-            // that opens again from either keeps what it opens.
-            phase = .closed
-            records.abandonSync()
-            let queued = queue
-            inFlight = nil
-            queue = []
-            onEvent(.gone)
-            f.pending.then(.failure(.noAnswer))
-            for p in queued { p.then(.failure(.closed)) }
+            shutDown(.gone, unanswered: .noAnswer)
         } else if phase == .open, t >= lastAnswer + Companion.idle {
             if syncOwed {
                 syncOwed = false
@@ -254,12 +245,10 @@ public final class Connection {
             if wallTime != nil { queue.insert(Pending(kind: .setTime), at: 0) }
             onEvent(.ready(version: v, firmware: fw))
         case let (.hello, .error(code)):
-            close()
-            onEvent(.refused(code: code))
+            shutDown(.refused(code: code))
             return
         case (.hello, _):
-            close()
-            onEvent(.gone)
+            shutDown(.gone)
             return
         case (_, .error(ErrorCode.helloFirst)):
             // The node took this client for gone, and acted on nothing: start again, and ask once
@@ -329,6 +318,20 @@ public final class Connection {
         }
         inFlight = (p, seq, now() + Companion.answerWait)
         send(bytes)
+    }
+
+    /// Closes on the node's account. Everything is cleared, and the app told, before any request's
+    /// callback runs: an app that opens again from either keeps what it opens.
+    private func shutDown(_ event: ConnectionEvent, unanswered: RequestFailure = .closed) {
+        phase = .closed
+        records.abandonSync()
+        let first = inFlight?.pending
+        inFlight = nil
+        let rest = queue
+        queue = []
+        onEvent(event)
+        first?.then(.failure(unanswered))
+        for p in rest { p.then(.failure(.closed)) }
     }
 
     /// Every request held, unanswered or waiting, which the connection then no longer holds. A

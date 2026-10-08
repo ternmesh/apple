@@ -412,6 +412,22 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(result, .failure(.closed))
     }
 
+    /// A refused HELLO is said before the requests waiting on it fail: one that opens again keeps
+    /// the connection it opens.
+    func testARefusedHelloIsSaidBeforeTheRequestsWaitingOnIt() throws {
+        let node = Node()
+        var refused = false
+        node.connection.onEvent = { if case .refused = $0 { refused = true } }
+        node.connection.open()
+        node.connection.submit(.ping) { _ in
+            XCTAssertTrue(refused, "the app is told before the request's callback")
+            node.connection.open()
+        }
+        let hello = try Frame.decode(node.sent.removeFirst())
+        node.connection.receive(try Frame(seq: hello.seq, body: .error(code: ErrorCode.mtu)).encode())
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["HELLO"])
+    }
+
     func testSendingAgainWithTheSameRef() throws {
         let node = Node()
         node.connection.open()
