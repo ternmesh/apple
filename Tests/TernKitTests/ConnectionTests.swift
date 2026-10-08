@@ -343,6 +343,23 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["PING"])
     }
 
+    /// News missed while a sync is out, and then that sync refused: the sync it wanted waits for
+    /// the idle deadline with the one refused, rather than going out at once.
+    func testASyncWantedWhileTheRefusedOneWasOutWaitsToo() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerOne()  // INFO
+        node.answerOne()  // OK to SET_TIME
+        let sync = try Frame.decode(node.sent.removeFirst())
+        node.newsCount &+= 1  // one lost
+        node.news(.power(Power(millivolts: 3900, percent: 80, flags: 0)))
+        node.connection.receive(try Frame(seq: sync.seq, body: .error(code: ErrorCode.notNow)).encode())
+        XCTAssertEqual(node.sent, [])
+        node.time = Companion.idle
+        node.connection.tick()
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["SYNC"])
+    }
+
     /// A sync that finishes some other way pays what a refused one owed: the idle deadline pings.
     func testASyncThatFinishesClearsTheOneOwed() throws {
         let node = Node()

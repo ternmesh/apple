@@ -259,6 +259,9 @@ public final class Connection {
         case let (_, .error(code)):
             if p.isSync {
                 records.abandonSync()
+                // A sync wanted while this one was out is the one owed: it waits for the idle
+                // deadline too, or a node that keeps refusing is asked again at once, forever.
+                syncWanted = false
                 syncOwed = true
                 onEvent(.syncRefused(code: code))
             }
