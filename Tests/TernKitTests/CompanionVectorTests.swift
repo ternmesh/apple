@@ -101,12 +101,18 @@ final class CompanionVectorTests: XCTestCase {
         }
     }
 
-    /// Each older connection's frames read by the version its client speaks, and build back.
+    /// Each older connection's frames read by the version its client speaks, and build back; one
+    /// that version does not define is undefined.
     func testOlderEveryFrameReadsByItsVersion() throws {
         for c in v["older"]!.array {
             let version = UInt8(c["version"]!.int)
             for f in c["frames"]!.array {
                 let name = f["type"]!.string
+                // Version 1's client ends with a request its version does not define.
+                if let latest = try? Frame.decode(f["frame"]!.bytes), latest.body.since > version {
+                    XCTAssertThrowsError(try Frame.decode(f["frame"]!.bytes, version: version), name)
+                    continue
+                }
                 let frame = try Frame.decode(f["frame"]!.bytes, version: version)
                 XCTAssertEqual(frame.body.name, name)
                 XCTAssertEqual(Hex.encode(try frame.encode()), f["frame"]!.string, "\(version) \(name)")
@@ -115,6 +121,17 @@ final class CompanionVectorTests: XCTestCase {
         // And by version 3, version 2's SYNCED is cut short.
         XCTAssertThrowsError(try Frame.decode([0x43, 0x02]))
         XCTAssertEqual(try Frame.decode([0x43, 0x02], version: 2).body, .synced(news: nil))
+    }
+
+    /// A frame of a later version than the one both ends speak is one that version does not
+    /// define.
+    func testAFrameOfALaterVersionIsUndefined() throws {
+        let gone = try Frame(seq: 1, body: .groupGone(group: GroupID([UInt8](repeating: 1, count: 8))!)).encode()
+        XCTAssertThrowsError(try Frame.decode(gone, version: 1)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertNoThrow(try Frame.decode(gone, version: 2))
+        let end = try Frame(seq: 1, body: .endSession(address: Address([UInt8](repeating: 1, count: 32))!)).encode()
+        XCTAssertThrowsError(try Frame.decode(end, version: 0)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertNoThrow(try Frame.decode(end, version: 1))
     }
 
     func testAFrameThatNeverFinishesIsGivenUpAsText() {

@@ -464,12 +464,14 @@ public enum Body: Equatable, Sendable {
 }
 
 extension Body {
-    /// The least version that defines this request: a client sends none the node's version does
-    /// not define.
+    /// The least version that defines this frame: a client sends no request the node's version
+    /// does not define, and reads no frame the version both ends speak does not.
     public var since: UInt8 {
         switch self {
-        case .endSession: 1
-        case .makeGroup, .leaveGroup, .nameGroup, .sendGroup, .sendInvite, .join: 2
+        case .endSession, .asked: 1
+        case .makeGroup, .leaveGroup, .nameGroup, .sendGroup, .sendInvite, .join, .made, .group, .groupGone,
+            .groupMessage, .invite:
+            2
         default: 0
         }
     }

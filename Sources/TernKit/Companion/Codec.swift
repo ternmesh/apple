@@ -221,6 +221,7 @@ extension Frame {
                 state: try r.u8(), reason: try r.u8(), wait: try r.u16(), name: try r.str(limit: Companion.nameMax)))
         default: throw DecodeError.undefined
         }
+        guard body.since <= version else { throw DecodeError.undefined }
         return Frame(seq: bytes[1], body: body)
     }
 
