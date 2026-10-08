@@ -31,6 +31,9 @@ public enum ConnectionEvent: Equatable {
     case news(Body)
     /// A sync finished: `records` is the node's, as of now.
     case synced
+    /// The node refused a sync with this code (8: not now). The connection asks again at the
+    /// next idle deadline, in place of a `PING`.
+    case syncRefused(code: UInt8)
     /// The node refused the `HELLO` with this code: 7 if the Bluetooth link's MTU is too small.
     case refused(code: UInt8)
     /// The node did not answer in time. Close the link and open it again, then call `open()`.
@@ -72,6 +75,8 @@ public final class Connection {
     /// finishes. A connection that starts has missed whatever changed while there was none.
     private var missedSince: UInt32?
     private var syncWanted = false
+    /// A sync was refused: the next idle deadline asks again.
+    private var syncOwed = false
     private var queue: [Pending] = []
     private var inFlight: (pending: Pending, seq: UInt8, deadline: Double)?
     private var lastAnswer = 0.0
@@ -188,7 +193,12 @@ public final class Connection {
             for p in queued { p.then(.failure(.closed)) }
             onEvent(.gone)
         } else if phase == .open, t >= lastAnswer + Companion.idle {
-            transmit(Pending(kind: .ping))
+            if syncOwed {
+                syncOwed = false
+                resync()
+            } else {
+                transmit(Pending(kind: .ping))
+            }
         }
     }
 
@@ -234,6 +244,7 @@ public final class Connection {
             expectedNews = 0
             missedSince = min(missedSince ?? .max, records.greatest)
             syncWanted = false
+            syncOwed = false
             queue.insert(Pending(kind: .sync), at: 0)
             if wallTime != nil { queue.insert(Pending(kind: .setTime), at: 0) }
             onEvent(.ready(version: v, firmware: fw))
@@ -253,7 +264,11 @@ public final class Connection {
             hello()
             return
         case let (_, .error(code)):
-            if p.isSync { records.abandonSync() }
+            if p.isSync {
+                records.abandonSync()
+                syncOwed = true
+                onEvent(.syncRefused(code: code))
+            }
             p.then(.failure(.refused(code: code)))
         case (.sync, .synced):
             if records.finishSync(version: agreed ?? version) {

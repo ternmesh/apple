@@ -268,6 +268,27 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 4)])
     }
 
+    /// A sync the node refuses is said, and asked for again at the next idle deadline in place of
+    /// a PING: not at once, which a node that keeps refusing would answer for ever.
+    func testARefusedSyncIsAskedForAgainWhenIdle() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerOne()  // INFO
+        node.answerOne()  // OK to SET_TIME
+        let sync = try Frame.decode(node.sent.removeFirst())
+        node.connection.receive(try Frame(seq: sync.seq, body: .error(code: ErrorCode.notNow)).encode())
+        XCTAssertEqual(node.events.last, .syncRefused(code: ErrorCode.notNow))
+        XCTAssertEqual(node.sent, [])
+        node.time = Companion.idle
+        node.connection.tick()
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["SYNC"])
+        node.answerAll()
+        XCTAssertEqual(node.events.last, .synced)
+        node.time = 2 * Companion.idle
+        node.connection.tick()
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["PING"])
+    }
+
     /// A sync that missed some of its news proves nothing about what is gone: the next one does.
     func testASyncThatMissedNewsForgetsNothing() throws {
         let node = Node()
