@@ -187,8 +187,10 @@ final class NodeModel: ObservableObject {
 
     func saveContact(_ address: Address, name: String) {
         guard fits(name, Companion.nameMax) else { return }
-        request(.saveContact(address: address, name: name))
-        asked.removeAll { $0.address == address }
+        // The turned-away address stays offered until the node has saved it, so a refusal can be tried again.
+        request(.saveContact(address: address, name: name)) { [weak self] _ in
+            self?.asked.removeAll { $0.address == address }
+        }
     }
 
     func removeContact(_ address: Address) { request(.removeContact(address: address)) }
