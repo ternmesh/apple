@@ -40,7 +40,9 @@ final class NodeModel: ObservableObject {
     @Published private(set) var nodeName: String?
     @Published private(set) var records = Records()
     @Published private(set) var conversations: [Conversation] = []
-    @Published private(set) var outgoing: [Outgoing] = []
+    @Published private(set) var outgoing: [Outgoing] = [] {
+        didSet { keepOutgoing() }
+    }
     @Published private(set) var asked: [Asked] = []
     @Published private(set) var firmware: String?
     @Published private(set) var nodeVersion: UInt8?
@@ -71,7 +73,10 @@ final class NodeModel: ObservableObject {
         link = BluetoothLink()
         remembered = link.remembered
         nodeName = UserDefaults.standard.string(forKey: Self.nameKey)
-        if let id = link.remembered { records = Self.load(id) }
+        if let id = link.remembered {
+            records = Self.load(id)
+            outgoing = Self.loadOutgoing(id)
+        }
         conversations = records.conversations
         link.makeConnection = { [weak self] id in
             // The records already loaded are the node's, unless the link is opening to another.
@@ -94,9 +99,11 @@ final class NodeModel: ObservableObject {
     func connect(to node: FoundNode) {
         if remembered != node.id {
             save()
+            // The node first: what is set below is kept on disk under it.
+            remembered = node.id
             records = Self.load(node.id)
             conversations = records.conversations
-            outgoing = []
+            outgoing = Self.loadOutgoing(node.id)
             asked = []
         }
         remembered = node.id
@@ -109,7 +116,10 @@ final class NodeModel: ObservableObject {
 
     /// Forgets the node, and what the app kept of it.
     func forget() {
-        if let id = remembered { try? FileManager.default.removeItem(at: Self.file(id)) }
+        if let id = remembered {
+            try? FileManager.default.removeItem(at: Self.file(id))
+            UserDefaults.standard.removeObject(forKey: Self.outgoingKey(id))
+        }
         link.forget()
         remembered = nil
         nodeName = nil
@@ -297,6 +307,41 @@ final class NodeModel: ObservableObject {
     private static func load(_ id: UUID) -> Records {
         guard let data = try? Data(contentsOf: file(id)) else { return Records() }
         return Records(decoding: [UInt8](data))
+    }
+
+    /// Messages the node may or may not hold are kept too, with their `ref`s: written again after
+    /// a restart under a new `ref`, one the node did take would go twice. One that was being sent
+    /// when the app stopped comes back as unanswered.
+    private func keepOutgoing() {
+        guard let id = remembered else { return }
+        let kept = outgoing.filter { $0.status == .sending || $0.status == .unanswered }.map { o -> [String: String] in
+            let peer: String
+            switch o.peer {
+            case let .contact(a): peer = "c:\(a)"
+            case let .group(g): peer = "g:\(g)"
+            }
+            return ["ref": String(o.ref), "peer": peer, "text": o.text]
+        }
+        UserDefaults.standard.set(kept, forKey: Self.outgoingKey(id))
+    }
+
+    private static func outgoingKey(_ id: UUID) -> String { "org.ternmesh.tern.outgoing.\(id.uuidString)" }
+
+    private static func loadOutgoing(_ id: UUID) -> [Outgoing] {
+        let kept = UserDefaults.standard.array(forKey: outgoingKey(id)) as? [[String: String]] ?? []
+        return kept.compactMap { d in
+            guard let ref = d["ref"].flatMap(UInt32.init), let key = d["peer"], let text = d["text"] else { return nil }
+            let hex = String(key.dropFirst(2))
+            let peer: Peer?
+            if key.hasPrefix("c:") {
+                peer = Address(hex: hex).map(Peer.contact)
+            } else if key.hasPrefix("g:") {
+                peer = GroupID(hex: hex).map(Peer.group)
+            } else {
+                peer = nil
+            }
+            return peer.map { Outgoing(ref: ref, peer: $0, text: text, status: .unanswered) }
+        }
     }
 
     /// Writes the records now. After each sync, and when the app leaves the front.
