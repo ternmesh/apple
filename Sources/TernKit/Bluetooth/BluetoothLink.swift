@@ -409,9 +409,18 @@ extension BluetoothLink: CBCentralManagerDelegate {
 }
 
 extension BluetoothLink: CBPeripheralDelegate {
+    /// Something other than pairing went wrong on the link, part way to opening it: what the node
+    /// has is unknown, not missing, so the link starts again rather than giving up on it.
+    private func restart() {
+        if let p = self.peripheral {
+            drop(p)
+            state = .connecting
+        }
+    }
+
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard peripheral == self.peripheral else { return }
-        if let error, Self.isPairing(error) { return fail(.pairing) }
+        if let error { return Self.isPairing(error) ? fail(.pairing) : restart() }
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.service }) else {
             return fail(.notTern)
         }
@@ -420,6 +429,7 @@ extension BluetoothLink: CBPeripheralDelegate {
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         guard peripheral == self.peripheral, service.uuid == Self.service else { return }
+        if let error { return Self.isPairing(error) ? fail(.pairing) : restart() }
         let chars = service.characteristics ?? []
         guard chars.contains(where: { $0.uuid == Self.toNode }),
               let from = chars.first(where: { $0.uuid == Self.fromNode })
@@ -435,13 +445,7 @@ extension BluetoothLink: CBPeripheralDelegate {
     ) {
         guard peripheral == self.peripheral, characteristic.uuid == Self.fromNode else { return }
         if let error {
-            if Self.isPairing(error) { return fail(.pairing) }
-            // Something else went wrong on the link: start it again.
-            if let p = self.peripheral {
-                drop(p)
-                state = .connecting
-            }
-            return
+            return Self.isPairing(error) ? fail(.pairing) : restart()
         }
         guard characteristic.isNotifying,
               let writer = characteristic.service?.characteristics?.first(where: { $0.uuid == Self.toNode })
