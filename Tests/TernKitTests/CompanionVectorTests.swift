@@ -101,6 +101,22 @@ final class CompanionVectorTests: XCTestCase {
         }
     }
 
+    /// Each older connection's frames read by the version its client speaks, and build back.
+    func testOlderEveryFrameReadsByItsVersion() throws {
+        for c in v["older"]!.array {
+            let version = UInt8(c["version"]!.int)
+            for f in c["frames"]!.array {
+                let name = f["type"]!.string
+                let frame = try Frame.decode(f["frame"]!.bytes, version: version)
+                XCTAssertEqual(frame.body.name, name)
+                XCTAssertEqual(Hex.encode(try frame.encode()), f["frame"]!.string, "\(version) \(name)")
+            }
+        }
+        // And by version 3, version 2's SYNCED is cut short.
+        XCTAssertThrowsError(try Frame.decode([0x43, 0x02]))
+        XCTAssertEqual(try Frame.decode([0x43, 0x02], version: 2).body, .synced(news: nil))
+    }
+
     func testAFrameThatNeverFinishesIsGivenUpAsText() {
         var r = StreamReader()
         XCTAssertEqual(r.push(Hex.decode("f554000240")!), [])
@@ -155,7 +171,7 @@ final class CompanionVectorTests: XCTestCase {
         case "OK": return .ok
         case "ERROR": return .error(code: u8("code"))
         case "INFO": return .info(version: u8("version"), firmware: str("firmware"))
-        case "SYNCED": return .synced
+        case "SYNCED": return .synced(news: f["news"].map { UInt8($0.int) })
         case "QUEUED": return .queued(id: u32("id"))
         case "MADE": return .made(group: gid("group"))
         case "SELF":

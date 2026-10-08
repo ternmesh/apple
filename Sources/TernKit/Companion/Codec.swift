@@ -31,8 +31,10 @@ extension Frame {
             w.u8(version)
         case let .sync(after):
             w.u32(after)
-        case .ping, .ok, .synced:
+        case .ping, .ok:
             break
+        case let .synced(news):
+            if let news { w.u8(news) }
         case let .setTime(time):
             w.u32(time)
         case let .set(setting):
@@ -148,9 +150,10 @@ extension Frame {
         return w.bytes
     }
 
-    /// Reads a frame. Bytes after the fields this version defines are ignored, as the
-    /// specification requires: that is how a later version adds a field.
-    public static func decode(_ bytes: [UInt8]) throws -> Frame {
+    /// Reads a frame by `version`, the one both ends speak. Bytes after the fields that version
+    /// defines are ignored, as the specification requires: that is how a later version adds a
+    /// field.
+    public static func decode(_ bytes: [UInt8], version: UInt8 = Companion.version) throws -> Frame {
         guard bytes.count >= 2 else { throw DecodeError.short }
         guard bytes.count <= Companion.maxFrame else { throw DecodeError.malformed }
         var r = Reader(bytes: bytes, at: 2)
@@ -183,7 +186,7 @@ extension Frame {
         case 0x40: body = .ok
         case 0x41: body = .error(code: try r.u8())
         case 0x42: body = .info(version: try r.u8(), firmware: try r.str(limit: Companion.firmwareMax))
-        case 0x43: body = .synced
+        case 0x43: body = .synced(news: version >= 3 ? try r.u8() : nil)
         case 0x44: body = .queued(id: try r.u32())
         case 0x45: body = .made(group: try r.gid())
         case 0x80:

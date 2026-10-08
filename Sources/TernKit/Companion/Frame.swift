@@ -7,7 +7,7 @@
 public enum Companion {
     /// The version this client speaks. Version 1 is this without groups, and version 0 is
     /// version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 2
+    public static let version: UInt8 = 3
     public static let maxFrame = 180
     public static let textMax = 128
     public static let nameMax = 31
@@ -354,7 +354,9 @@ public enum Body: Equatable, Sendable {
     case ok
     case error(code: UInt8)
     case info(version: UInt8, firmware: String)
-    case synced
+    /// The sync is done. `news` is the node's count as it answers, the `seq` of its next news
+    /// frame; nil from a node of version 2 or earlier, whose `SYNCED` has no fields.
+    case synced(news: UInt8?)
     case queued(id: UInt32)
     case made(group: GroupID)
 

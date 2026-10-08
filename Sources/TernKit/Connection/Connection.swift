@@ -167,7 +167,7 @@ public final class Connection {
         var frame: Frame?
         var malformed = false
         do {
-            frame = try Frame.decode(bytes)
+            frame = try Frame.decode(bytes, version: agreed ?? version)
         } catch DecodeError.malformed {
             malformed = true
         } catch {}
@@ -263,7 +263,16 @@ public final class Connection {
                 onEvent(.syncRefused(code: code))
             }
             p.then(.failure(.refused(code: code)))
-        case (.sync, .synced):
+        case let (.sync, .synced(news)):
+            if let news, news != expectedNews {
+                // The sync's last news frames were lost, with nothing after them to show the gap:
+                // the node's count says so. What it sent is held; what it did not prove gone is
+                // not forgotten, and the next sync asks again.
+                records.missed()
+                records.abandonSync()
+                syncWanted = true
+                expectedNews = news
+            }
             if records.finishSync(version: agreed ?? version) {
                 syncOwed = false
                 onEvent(.synced)

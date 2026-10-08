@@ -20,7 +20,7 @@ Linux too. Open `Package.swift` in Xcode to work on it there.
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 2, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 3, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Connection/Connection.swift` | One connection, the client's half: `HELLO` and the version both speak, one request at a time, counted news, syncing again, and the `PING` that keeps a node from taking the app for gone. No I/O and no clock of its own: a link hands it frames and calls `tick()`. |

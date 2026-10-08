@@ -24,7 +24,7 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 11, "every request answered")
         let r = link.connection.records
         XCTAssertEqual(r.me?.region, "EU868")
-        XCTAssertEqual(r.syncedVersion, 2)
+        XCTAssertEqual(r.syncedVersion, 3)
         XCTAssertEqual(r.contacts.values.map(\.name).sorted(), ["Bob", "Carol"])
         XCTAssertEqual(r.contacts.values.map(\.session), [0, 0], "Bob's session ended; Carol never had one")
         XCTAssertEqual(r.groups.values.map(\.name), ["Ridge walkers"], "the group made was left, the one joined renamed")
@@ -68,7 +68,17 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(link.connection.records.items.count, 3)
     }
 
-    /// A client of version 2 talking to a node of version 1 does the same.
+    /// A client of version 2 reads the node's `SYNCED` as version 2's, without the count.
+    func testOlderVersion2() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 2 }!
+        let link = Link(Connection(version: 2, now: { 0 }, wallTime: nil))
+        _ = link.replay(older["frames"]!.array)
+        XCTAssertEqual(link.connection.agreed, 2)
+        XCTAssertEqual(link.events.filter { $0 == .synced }.count, 1)
+        XCTAssertEqual(link.connection.records.syncedVersion, 2)
+    }
+
+    /// A client of version 3 talking to a node of version 1 does the same.
     func testANodeOfAnEarlierVersionIsNotAskedWhatItCannotDo() throws {
         let node = Node()
         node.version = 1
@@ -148,7 +158,7 @@ final class ConnectionTests: XCTestCase {
         node.time += Companion.answerWait
         node.connection.tick()
         XCTAssertEqual(node.answerAll().map(\.name), ["HELLO", "SET_TIME", "SYNC"])
-        XCTAssertEqual(node.connection.agreed, 2)
+        XCTAssertEqual(node.connection.agreed, 3)
     }
 
     /// Opening again fails what was held only once the new HELLO is out, so a callback that opens
@@ -212,8 +222,8 @@ final class ConnectionTests: XCTestCase {
         node.news(.message(Node.message(id: 7, state: MessageState.sent)))
         node.news(.groupMessage(Node.groupMessage(id: 6, state: MessageState.sent)))
         node.news(.message(Node.message(id: 9, state: MessageState.received)))
-        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
-        XCTAssertEqual(node.connection.records.syncedVersion, 2)
+        node.answerSync()
+        XCTAssertEqual(node.connection.records.syncedVersion, 3)
 
         node.newsCount &+= 1  // one lost
         node.news(.state(MessageState(id: 9, state: MessageState.received, reason: 0, wait: 0)))
@@ -357,17 +367,56 @@ final class ConnectionTests: XCTestCase {
         node.answerOne()
         _ = node.sent.removeFirst()  // SYNC
         node.news(.contact(Contact(address: Node.bob, session: 1, name: "Bob")))
-        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+        node.answerSync()
         XCTAssertEqual(node.connection.records.contacts.count, 1)
 
         node.connection.resync()
         _ = node.sent.removeFirst()
         node.newsCount &+= 1  // CONTACT Bob, lost
         node.news(.power(Power(millivolts: 3900, percent: 80, flags: 0)))
-        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+        node.answerSync()
         XCTAssertEqual(node.connection.records.contacts.count, 1, "Bob is not taken for gone")
         XCTAssertEqual(node.events.filter { $0 == .synced }.count, 1)
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["SYNC"], "and it syncs again")
+    }
+
+    /// The sync's last news lost, with nothing after it to show a gap: `SYNCED`'s count does, and
+    /// the client forgets nothing on that sync's account and syncs again.
+    func testASyncWhoseLastNewsWasLostIsToldBySyncedsCount() throws {
+        let node = try synced(holding: [Node.message(id: 10, state: MessageState.delivered)])
+        node.connection.resync()
+        _ = node.sent.removeFirst()  // SYNC
+        node.news(.contact(Contact(address: Node.bob, session: 1, name: "Bob")))
+        node.answerSync()
+        XCTAssertEqual(node.connection.records.contacts.count, 1)
+
+        node.connection.resync()
+        _ = node.sent.removeFirst()
+        node.newsCount &+= 1  // CONTACT Bob, the sync's last news, lost
+        let synceds = node.events.filter { $0 == .synced }.count
+        node.answerSync()
+        XCTAssertEqual(node.connection.records.contacts.count, 1, "Bob is not taken for gone")
+        XCTAssertEqual(node.events.filter { $0 == .synced }.count, synceds)
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 10)], "and it syncs again")
+
+        _ = node.sent.removeFirst()
+
+        // News after it is not taken for another gap.
+        node.news(.power(Power(millivolts: 3900, percent: 80, flags: 0)))
+        node.answerSync()
+        XCTAssertEqual(node.sent, [])
+        XCTAssertEqual(node.events.last, .synced)
+    }
+
+    /// A client of version 3 reads a node of version 2's `SYNCED` as the two bytes it is.
+    func testANodeOfVersion2SyncsWithoutTheCount() throws {
+        let node = Node()
+        node.version = 2
+        node.connection.open()
+        node.answerAll()
+        XCTAssertEqual(node.connection.agreed, 2)
+        XCTAssertEqual(node.events.last, .synced)
+        XCTAssertEqual(node.connection.records.syncedVersion, 2)
     }
 
     /// Records kept from a version 2 connection, synced with a node that speaks an earlier
@@ -406,12 +455,12 @@ final class ConnectionTests: XCTestCase {
         node.news(.group(Group(group: Node.hut, name: "Hut")))
         node.news(.neighbour(Neighbour(routingId: 7, role: 1, snrQuarterDb: 20, heard: 3)))
         node.news(.message(Node.message(id: 3, state: MessageState.received)))
-        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+        node.answerSync()
 
         node.connection.resync()
         _ = node.sent.removeFirst()
         node.news(.contact(Contact(address: Node.bob, session: 1, name: "Bob")))
-        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+        node.answerSync()
         let r = node.connection.records
         XCTAssertEqual(Array(r.contacts.keys), [Node.bob])
         XCTAssertEqual(r.groups, [:])
@@ -487,7 +536,7 @@ extension ConnectionTests {
         node.answerOne()
         _ = node.sent.removeFirst()
         for m in messages { node.news(.message(m)) }
-        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+        node.answerSync()
         XCTAssertEqual(node.sent, [])
         return node
     }
@@ -540,7 +589,7 @@ private final class Node {
     static let hut = GroupID([UInt8](repeating: 0x48, count: 8))!
 
     var time = 0.0
-    var version: UInt8 = 2
+    var version: UInt8 = Companion.version
     var newsCount: UInt8 = 0
     var sent: [[UInt8]] = []
     var events: [ConnectionEvent] = []
@@ -560,6 +609,14 @@ private final class Node {
         newsCount &+= 1
     }
 
+    /// `SYNCED` as this node answers it: with its count from version 3.
+    var syncedAnswer: Body { .synced(news: min(version, connection.version) >= 3 ? newsCount : nil) }
+
+    /// Answers the last request, a `SYNC`, now.
+    func answerSync() {
+        connection.receive(try! Frame(seq: seq, body: syncedAnswer).encode())
+    }
+
     /// Answers the oldest request sent.
     @discardableResult
     func answerOne() -> Body {
@@ -569,7 +626,7 @@ private final class Node {
         case .hello:
             newsCount = 0
             answer = .info(version: version, firmware: "test")
-        case .sync: answer = .synced
+        case .sync: answer = syncedAnswer
         case .send, .sendGroup, .sendInvite: answer = .queued(id: 1)
         case .makeGroup: answer = .made(group: Node.hut)
         default: answer = .ok
