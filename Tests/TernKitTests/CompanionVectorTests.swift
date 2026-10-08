@@ -23,7 +23,7 @@ final class CompanionVectorTests: XCTestCase {
 
     func testFramesBuiltReadWrappedAndFound() throws {
         let cases = v["frames"]!.array
-        XCTAssertGreaterThanOrEqual(cases.count, 34)
+        XCTAssertGreaterThanOrEqual(cases.count, 53)
         for c in cases {
             let name = c["type"]!.string
             let frame = Frame(seq: UInt8(c["seq"]!.int), body: try body(name, c["fields"]!.object))
@@ -127,6 +127,7 @@ final class CompanionVectorTests: XCTestCase {
         func u32(_ k: String) -> UInt32 { UInt32(f[k]!.int) }
         func str(_ k: String) -> String { f[k]!.string }
         func addr(_ k: String) -> Address { Address(f[k]!.bytes)! }
+        func gid(_ k: String) -> GroupID { GroupID(f[k]!.bytes)! }
         switch name {
         case "HELLO": return .hello(version: u8("version"))
         case "SYNC": return .sync(after: u32("after"))
@@ -144,11 +145,19 @@ final class CompanionVectorTests: XCTestCase {
         case "READ": return .read(through: u32("through"))
         case "SAVE_CONTACT": return .saveContact(address: addr("address"), name: str("name"))
         case "REMOVE_CONTACT": return .removeContact(address: addr("address"))
+        case "END_SESSION": return .endSession(address: addr("address"))
+        case "MAKE_GROUP": return .makeGroup(name: str("name"))
+        case "LEAVE_GROUP": return .leaveGroup(group: gid("group"))
+        case "NAME_GROUP": return .nameGroup(group: gid("group"), name: str("name"))
+        case "SEND_GROUP": return .sendGroup(ref: u32("ref"), group: gid("group"), text: str("text"))
+        case "SEND_INVITE": return .sendInvite(group: gid("group"), to: addr("to"))
+        case "JOIN": return .join(id: u32("id"))
         case "OK": return .ok
         case "ERROR": return .error(code: u8("code"))
         case "INFO": return .info(version: u8("version"), firmware: str("firmware"))
         case "SYNCED": return .synced
         case "QUEUED": return .queued(id: u32("id"))
+        case "MADE": return .made(group: gid("group"))
         case "SELF":
             return .nodeSelf(NodeSelf(
                 address: addr("address"), role: u8("role"), region: str("region"), power: i8("power"), time: u32("time")))
@@ -166,6 +175,17 @@ final class CompanionVectorTests: XCTestCase {
         case "AIRTIME":
             return .airtime(Airtime(period: u32("period"), allowed: u32("allowed"), used: u32("used"), wait: u32("wait")))
         case "POWER": return .power(Power(millivolts: u16("millivolts"), percent: u8("percent"), flags: u8("flags")))
+        case "ASKED": return .asked(address: addr("address"), why: u8("why"))
+        case "GROUP": return .group(Group(group: gid("group"), name: str("name")))
+        case "GROUP_GONE": return .groupGone(group: gid("group"))
+        case "GROUP_MESSAGE":
+            return .groupMessage(GroupMessage(
+                id: u32("id"), group: gid("group"), from: u32("from"), time: u32("time"), flags: u8("flags"),
+                state: u8("state"), reason: u8("reason"), wait: u16("wait"), text: str("text")))
+        case "INVITE":
+            return .invite(Invite(
+                id: u32("id"), contact: addr("contact"), group: gid("group"), time: u32("time"), flags: u8("flags"),
+                state: u8("state"), reason: u8("reason"), wait: u16("wait"), name: str("name")))
         default: throw DecodeError.undefined
         }
     }

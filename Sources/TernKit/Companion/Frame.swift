@@ -1,11 +1,13 @@
-// The companion protocol's frames: specification draft 0, draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 2: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    public static let version: UInt8 = 0
+    /// The version this client speaks. Version 1 is this without groups, and version 0 is
+    /// version 1 without `END_SESSION` and `ASKED`.
+    public static let version: UInt8 = 2
     public static let maxFrame = 180
     public static let textMax = 128
     public static let nameMax = 31
@@ -15,8 +17,15 @@ public enum Companion {
     public static let answerWait = 5.0
     /// The longest a client goes without a request, in seconds.
     public static let idle = 20.0
+    /// How long a node on a serial port waits for a request before it takes the client for gone.
+    public static let lapse = 60.0
     /// How long a byte stream may stall mid-frame before what is held is text, in seconds.
     public static let gap = 0.5
+    /// How many of its last messages a node matches a `SEND`'s `ref` against.
+    public static let refs = 16
+    /// The least time between two `ASKED`s for one address, or two of `NEIGHBOUR`, `AIRTIME` or
+    /// `POWER`, in seconds.
+    public static let quiet = 10.0
 
     /// The GATT service a node offers, and its two characteristics.
     public static let service = "7A280001-EB17-4C1C-889B-1741DD50FF40"
@@ -42,6 +51,46 @@ public struct Address: Hashable, Sendable, CustomStringConvertible {
     }
 
     public var description: String { Hex.encode(bytes) }
+}
+
+/// A group's id, which the node works out from the group's secret. A client never holds the
+/// secret: no frame carries it.
+public struct GroupID: Hashable, Sendable, CustomStringConvertible {
+    public static let length = 8
+    public let bytes: [UInt8]
+
+    public init?(_ bytes: [UInt8]) {
+        guard bytes.count == GroupID.length else { return nil }
+        self.bytes = bytes
+    }
+
+    public init?(hex: String) {
+        guard let bytes = Hex.decode(hex) else { return nil }
+        self.init(bytes)
+    }
+
+    public var description: String { Hex.encode(bytes) }
+}
+
+/// An `ERROR`'s code. A code this client does not know is a refusal all the same.
+public enum ErrorCode {
+    /// A request, or a setting, the node's version does not define.
+    public static let undefined: UInt8 = 1
+    public static let malformed: UInt8 = 2
+    /// A value the node refuses: a region it does not have, a power it cannot send at, empty text.
+    public static let refused: UInt8 = 3
+    /// Not a valid address, or the node's own.
+    public static let badAddress: UInt8 = 4
+    /// The node cannot hold another contact, message or group.
+    public static let noRoom: UInt8 = 5
+    /// `HELLO` first: on a connection that had one, the node has taken the client for gone.
+    public static let helloFirst: UInt8 = 6
+    /// The Bluetooth link's MTU is too small.
+    public static let mtu: UInt8 = 7
+    /// Not now: the node is finishing something else.
+    public static let notNow: UInt8 = 8
+    /// A group the node is not in, or an invite it does not hold.
+    public static let notHeld: UInt8 = 9
 }
 
 /// A frame: its sequence number and what it says. The type byte follows from the body.
@@ -158,6 +207,79 @@ public struct Message: Equatable, Sendable {
     }
 }
 
+/// `GROUP`: a group the node holds, with the user's name for it.
+public struct Group: Equatable, Sendable {
+    public var group: GroupID
+    public var name: String
+
+    public init(group: GroupID, name: String) {
+        self.group = group
+        self.name = name
+    }
+}
+
+/// `GROUP_MESSAGE`: one message written to a group or received from one. Its `id` is from the
+/// same count as a `MESSAGE`'s.
+public struct GroupMessage: Equatable, Sendable {
+    public var id: UInt32
+    public var group: GroupID
+    /// The routing id its writer claimed, 0 for one this node wrote. A claim, not a proof.
+    public var from: UInt32
+    public var time: UInt32
+    /// Bit 0: a received message has been read.
+    public var flags: UInt8
+    public var state: UInt8
+    public var reason: UInt8
+    public var wait: UInt16
+    public var text: String
+
+    public init(
+        id: UInt32, group: GroupID, from: UInt32, time: UInt32, flags: UInt8, state: UInt8, reason: UInt8,
+        wait: UInt16, text: String
+    ) {
+        self.id = id
+        self.group = group
+        self.from = from
+        self.time = time
+        self.flags = flags
+        self.state = state
+        self.reason = reason
+        self.wait = wait
+        self.text = text
+    }
+}
+
+/// `INVITE`: an invite to a group, sent to `contact` or received from it. It goes as a unicast
+/// message does, and has a message's states.
+public struct Invite: Equatable, Sendable {
+    public var id: UInt32
+    public var contact: Address
+    public var group: GroupID
+    public var time: UInt32
+    /// Bit 0: a received invite has been read.
+    public var flags: UInt8
+    public var state: UInt8
+    public var reason: UInt8
+    public var wait: UInt16
+    /// What the inviter calls the group.
+    public var name: String
+
+    public init(
+        id: UInt32, contact: Address, group: GroupID, time: UInt32, flags: UInt8, state: UInt8, reason: UInt8,
+        wait: UInt16, name: String
+    ) {
+        self.id = id
+        self.contact = contact
+        self.group = group
+        self.time = time
+        self.flags = flags
+        self.state = state
+        self.reason = reason
+        self.wait = wait
+        self.name = name
+    }
+}
+
 /// `NEIGHBOUR`: a node whose announces this one hears.
 public struct Neighbour: Equatable, Sendable {
     public var routingId: UInt32
@@ -208,7 +330,7 @@ public struct Power: Equatable, Sendable {
     }
 }
 
-/// What a frame says: every frame of version 0.
+/// What a frame says: every frame of version 2.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -220,6 +342,13 @@ public enum Body: Equatable, Sendable {
     case read(through: UInt32)
     case saveContact(address: Address, name: String)
     case removeContact(address: Address)
+    case endSession(address: Address)
+    case makeGroup(name: String)
+    case leaveGroup(group: GroupID)
+    case nameGroup(group: GroupID, name: String)
+    case sendGroup(ref: UInt32, group: GroupID, text: String)
+    case sendInvite(group: GroupID, to: Address)
+    case join(id: UInt32)
 
     // Answers, sent by the node with the request's seq.
     case ok
@@ -227,6 +356,7 @@ public enum Body: Equatable, Sendable {
     case info(version: UInt8, firmware: String)
     case synced
     case queued(id: UInt32)
+    case made(group: GroupID)
 
     // News, sent by the node with its count as seq.
     case nodeSelf(NodeSelf)
@@ -238,6 +368,13 @@ public enum Body: Equatable, Sendable {
     case neighbourGone(routingId: UInt32)
     case airtime(Airtime)
     case power(Power)
+    /// The node refused first contact from `address`, which proved itself: `why` is 1 if it is
+    /// not a contact, 2 if the node has no room for another session.
+    case asked(address: Address, why: UInt8)
+    case group(Group)
+    case groupGone(group: GroupID)
+    case groupMessage(GroupMessage)
+    case invite(Invite)
 
     /// The type byte.
     public var type: UInt8 {
@@ -251,11 +388,19 @@ public enum Body: Equatable, Sendable {
         case .read: 0x11
         case .saveContact: 0x18
         case .removeContact: 0x19
+        case .endSession: 0x1A
+        case .makeGroup: 0x20
+        case .leaveGroup: 0x21
+        case .nameGroup: 0x22
+        case .sendGroup: 0x23
+        case .sendInvite: 0x24
+        case .join: 0x25
         case .ok: 0x40
         case .error: 0x41
         case .info: 0x42
         case .synced: 0x43
         case .queued: 0x44
+        case .made: 0x45
         case .nodeSelf: 0x80
         case .contact: 0x81
         case .contactGone: 0x82
@@ -265,6 +410,11 @@ public enum Body: Equatable, Sendable {
         case .neighbourGone: 0x86
         case .airtime: 0x87
         case .power: 0x88
+        case .asked: 0x89
+        case .group: 0x8A
+        case .groupGone: 0x8B
+        case .groupMessage: 0x8C
+        case .invite: 0x8D
         }
     }
 
@@ -280,11 +430,19 @@ public enum Body: Equatable, Sendable {
         case .read: "READ"
         case .saveContact: "SAVE_CONTACT"
         case .removeContact: "REMOVE_CONTACT"
+        case .endSession: "END_SESSION"
+        case .makeGroup: "MAKE_GROUP"
+        case .leaveGroup: "LEAVE_GROUP"
+        case .nameGroup: "NAME_GROUP"
+        case .sendGroup: "SEND_GROUP"
+        case .sendInvite: "SEND_INVITE"
+        case .join: "JOIN"
         case .ok: "OK"
         case .error: "ERROR"
         case .info: "INFO"
         case .synced: "SYNCED"
         case .queued: "QUEUED"
+        case .made: "MADE"
         case .nodeSelf: "SELF"
         case .contact: "CONTACT"
         case .contactGone: "CONTACT_GONE"
@@ -294,6 +452,23 @@ public enum Body: Equatable, Sendable {
         case .neighbourGone: "NEIGHBOUR_GONE"
         case .airtime: "AIRTIME"
         case .power: "POWER"
+        case .asked: "ASKED"
+        case .group: "GROUP"
+        case .groupGone: "GROUP_GONE"
+        case .groupMessage: "GROUP_MESSAGE"
+        case .invite: "INVITE"
+        }
+    }
+}
+
+extension Body {
+    /// The least version that defines this request: a client sends none the node's version does
+    /// not define.
+    public var since: UInt8 {
+        switch self {
+        case .endSession: 1
+        case .makeGroup, .leaveGroup, .nameGroup, .sendGroup, .sendInvite, .join: 2
+        default: 0
         }
     }
 }
