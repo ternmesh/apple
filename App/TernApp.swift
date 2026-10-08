@@ -14,6 +14,16 @@ struct TernApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
+        #if os(macOS)
+        // One window: the model knows one conversation on screen, which two windows would fight over.
+        Window("Tern", id: "main") {
+            RootView()
+                .environmentObject(model)
+        }
+        .onChange(of: scenePhase) { phase in
+            model.isActive = phase == .active
+        }
+        #else
         WindowGroup {
             RootView()
                 .environmentObject(model)
@@ -21,6 +31,7 @@ struct TernApp: App {
         .onChange(of: scenePhase) { phase in
             model.isActive = phase == .active
         }
+        #endif
     }
 }
 
