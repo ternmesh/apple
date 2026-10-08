@@ -31,8 +31,10 @@ extension Frame {
             w.u8(version)
         case let .sync(after):
             w.u32(after)
-        case .ping, .ok, .synced:
+        case .ping, .ok:
             break
+        case let .synced(news):
+            if let news { w.u8(news) }
         case let .setTime(time):
             w.u32(time)
         case let .set(setting):
@@ -52,8 +54,24 @@ extension Frame {
         case let .saveContact(address, name):
             w.addr(address)
             try w.str(name, limit: Companion.nameMax, field: "name")
-        case let .removeContact(address):
+        case let .removeContact(address), let .endSession(address), let .contactGone(address):
             w.addr(address)
+        case let .makeGroup(name):
+            try w.str(name, limit: Companion.nameMax, field: "name")
+        case let .leaveGroup(group), let .made(group), let .groupGone(group):
+            w.gid(group)
+        case let .nameGroup(group, name):
+            w.gid(group)
+            try w.str(name, limit: Companion.nameMax, field: "name")
+        case let .sendGroup(ref, group, text):
+            w.u32(ref)
+            w.gid(group)
+            try w.str(text, limit: Companion.textMax, field: "text")
+        case let .sendInvite(group, to):
+            w.gid(group)
+            w.addr(to)
+        case let .join(id):
+            w.u32(id)
         case let .error(code):
             w.u8(code)
         case let .info(version, firmware):
@@ -71,8 +89,6 @@ extension Frame {
             w.addr(c.address)
             w.u8(c.session)
             try w.str(c.name, limit: Companion.nameMax, field: "name")
-        case let .contactGone(address):
-            w.addr(address)
         case let .message(m):
             w.u32(m.id)
             w.addr(m.contact)
@@ -103,16 +119,45 @@ extension Frame {
             w.u16(p.millivolts)
             w.u8(p.percent)
             w.u8(p.flags)
+        case let .asked(address, why):
+            w.addr(address)
+            w.u8(why)
+        case let .group(g):
+            w.gid(g.group)
+            try w.str(g.name, limit: Companion.nameMax, field: "name")
+        case let .groupMessage(m):
+            w.u32(m.id)
+            w.gid(m.group)
+            w.u32(m.from)
+            w.u32(m.time)
+            w.u8(m.flags)
+            w.u8(m.state)
+            w.u8(m.reason)
+            w.u16(m.wait)
+            try w.str(m.text, limit: Companion.textMax, field: "text")
+        case let .invite(i):
+            w.u32(i.id)
+            w.addr(i.contact)
+            w.gid(i.group)
+            w.u32(i.time)
+            w.u8(i.flags)
+            w.u8(i.state)
+            w.u8(i.reason)
+            w.u16(i.wait)
+            try w.str(i.name, limit: Companion.nameMax, field: "name")
         }
         guard w.bytes.count <= Companion.maxFrame else { throw EncodeError.frameTooLong(w.bytes.count) }
         return w.bytes
     }
 
-    /// Reads a frame. Bytes after the fields this version defines are ignored, as the
-    /// specification requires: that is how a later version adds a field.
-    public static func decode(_ bytes: [UInt8]) throws -> Frame {
+    /// Reads a frame by `version`, the one both ends speak. Bytes after the fields that version
+    /// defines are ignored, as the specification requires: that is how a later version adds a
+    /// field.
+    public static func decode(_ bytes: [UInt8], version: UInt8 = Companion.version) throws -> Frame {
         guard bytes.count >= 2 else { throw DecodeError.short }
         guard bytes.count <= Companion.maxFrame else { throw DecodeError.malformed }
+        // A type the version spoken does not define is undefined however its fields read.
+        guard Companion.since(type: bytes[0]) <= version else { throw DecodeError.undefined }
         var r = Reader(bytes: bytes, at: 2)
         let body: Body
         switch bytes[0] {
@@ -133,11 +178,19 @@ extension Frame {
         case 0x11: body = .read(through: try r.u32())
         case 0x18: body = .saveContact(address: try r.addr(), name: try r.str(limit: Companion.nameMax))
         case 0x19: body = .removeContact(address: try r.addr())
+        case 0x1A: body = .endSession(address: try r.addr())
+        case 0x20: body = .makeGroup(name: try r.str(limit: Companion.nameMax))
+        case 0x21: body = .leaveGroup(group: try r.gid())
+        case 0x22: body = .nameGroup(group: try r.gid(), name: try r.str(limit: Companion.nameMax))
+        case 0x23: body = .sendGroup(ref: try r.u32(), group: try r.gid(), text: try r.str(limit: Companion.textMax))
+        case 0x24: body = .sendInvite(group: try r.gid(), to: try r.addr())
+        case 0x25: body = .join(id: try r.u32())
         case 0x40: body = .ok
         case 0x41: body = .error(code: try r.u8())
         case 0x42: body = .info(version: try r.u8(), firmware: try r.str(limit: Companion.firmwareMax))
-        case 0x43: body = .synced
+        case 0x43: body = .synced(news: version >= 3 ? try r.u8() : nil)
         case 0x44: body = .queued(id: try r.u32())
+        case 0x45: body = .made(group: try r.gid())
         case 0x80:
             body = .nodeSelf(NodeSelf(
                 address: try r.addr(), role: try r.u8(), region: try r.str(limit: Companion.regionMax),
@@ -157,6 +210,17 @@ extension Frame {
         case 0x87:
             body = .airtime(Airtime(period: try r.u32(), allowed: try r.u32(), used: try r.u32(), wait: try r.u32()))
         case 0x88: body = .power(Power(millivolts: try r.u16(), percent: try r.u8(), flags: try r.u8()))
+        case 0x89: body = .asked(address: try r.addr(), why: try r.u8())
+        case 0x8A: body = .group(Group(group: try r.gid(), name: try r.str(limit: Companion.nameMax)))
+        case 0x8B: body = .groupGone(group: try r.gid())
+        case 0x8C:
+            body = .groupMessage(GroupMessage(
+                id: try r.u32(), group: try r.gid(), from: try r.u32(), time: try r.u32(), flags: try r.u8(),
+                state: try r.u8(), reason: try r.u8(), wait: try r.u16(), text: try r.str(limit: Companion.textMax)))
+        case 0x8D:
+            body = .invite(Invite(
+                id: try r.u32(), contact: try r.addr(), group: try r.gid(), time: try r.u32(), flags: try r.u8(),
+                state: try r.u8(), reason: try r.u8(), wait: try r.u16(), name: try r.str(limit: Companion.nameMax)))
         default: throw DecodeError.undefined
         }
         return Frame(seq: bytes[1], body: body)
@@ -184,6 +248,7 @@ struct Writer {
         bytes += [UInt8(v >> 24), UInt8(v >> 16 & 0xFF), UInt8(v >> 8 & 0xFF), UInt8(v & 0xFF)]
     }
     mutating func addr(_ a: Address) { bytes += a.bytes }
+    mutating func gid(_ g: GroupID) { bytes += g.bytes }
     mutating func str(_ s: String, limit: Int, field: String) throws {
         let utf8 = Array(s.utf8)
         guard utf8.count <= limit else { throw EncodeError.tooLong(field: field, limit: limit) }
@@ -207,6 +272,7 @@ struct Reader {
     mutating func u16() throws -> UInt16 { try take(2).reduce(0) { $0 << 8 | UInt16($1) } }
     mutating func u32() throws -> UInt32 { try take(4).reduce(0) { $0 << 8 | UInt32($1) } }
     mutating func addr() throws -> Address { Address(Array(try take(Address.length)))! }
+    mutating func gid() throws -> GroupID { GroupID(Array(try take(GroupID.length)))! }
     mutating func str(limit: Int) throws -> String {
         let n = Int(try u8())
         guard n <= limit else { throw DecodeError.malformed }
