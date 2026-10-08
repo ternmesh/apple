@@ -226,7 +226,9 @@ final class ConnectionTests: XCTestCase {
         r.syncedVersion = 2
         r.items[4] = .message(Node.message(id: 4, state: MessageState.delivered))
         r.items[8] = .groupMessage(Node.groupMessage(id: 8, state: MessageState.sent))
-        XCTAssertEqual(r.after(version: 2, missedSince: 8), 8)
+        r.missedSince = 8
+        XCTAssertEqual(r.after(version: 2), 8)
+        r.missedSince = nil
         XCTAssertEqual(r.after(version: 2), 8)
         // Speaking a later version than at the last sync: everything, once.
         r.syncedVersion = 1
@@ -240,6 +242,25 @@ final class ConnectionTests: XCTestCase {
         node.newsCount &+= 1  // MESSAGE 11, lost
         node.news(.message(Node.message(id: 12, state: MessageState.received)))
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 10)])
+    }
+
+    /// What was missed is kept with the records: an app that stops before the sync after a gap
+    /// finishes, and starts again from what it saved, still asks again from before the gap.
+    func testMissedNewsOutlivesTheConnection() throws {
+        let node = try synced(holding: [Node.message(id: 10, state: MessageState.delivered)])
+        node.newsCount &+= 1  // MESSAGE 11, lost
+        node.news(.message(Node.message(id: 12, state: MessageState.received)))
+        let saved = node.connection.records
+        XCTAssertEqual(saved.missedSince, 10)
+
+        let next = Node()
+        next.records = saved
+        next.connection.open()
+        next.answerOne()
+        next.answerOne()
+        XCTAssertEqual(try next.sent.map { try Frame.decode($0).body }, [.sync(after: 10)])
+        next.answerOne()
+        XCTAssertNil(next.connection.records.missedSince)
     }
 
     /// Another client's READ may have been the news lost: a received message still unread is
@@ -525,8 +546,10 @@ private final class Node {
     var events: [ConnectionEvent] = []
     /// The seq of the last request.
     var seq: UInt8 = 0
+    /// What the client starts with.
+    var records = Records()
     lazy var connection: Connection = {
-        let c = Connection(now: { [unowned self] in time }, wallTime: { 1_790_000_000 })
+        let c = Connection(records: records, now: { [unowned self] in time }, wallTime: { 1_790_000_000 })
         c.send = { [unowned self] in sent.append($0); seq = $0[1] }
         c.onEvent = { [unowned self] in events.append($0) }
         return c

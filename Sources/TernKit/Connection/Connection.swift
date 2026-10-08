@@ -71,9 +71,6 @@ public final class Connection {
     private var phase = Phase.closed
     private var seq: UInt8 = 0
     private var expectedNews: UInt8 = 0
-    /// The greatest `id` held when news was first missed, until a sync that asked again from it
-    /// finishes. A connection that starts has missed whatever changed while there was none.
-    private var missedSince: UInt32?
     private var syncWanted = false
     /// A sync was refused: the next idle deadline asks again.
     private var syncOwed = false
@@ -215,7 +212,7 @@ public final class Connection {
         if seq != expectedNews || lost {
             // What was lost may be a record this sync would have sent: it no longer proves what
             // is gone, and the one after it will.
-            if missedSince == nil { missedSince = records.greatest }
+            records.missed()
             records.abandonSync()
             syncWanted = true
         }
@@ -239,7 +236,8 @@ public final class Connection {
             firmware = fw
             phase = .open
             expectedNews = 0
-            missedSince = min(missedSince ?? .max, records.greatest)
+            // A connection that starts has missed whatever changed while there was none.
+            records.missed()
             syncWanted = false
             syncOwed = false
             queue.insert(Pending(kind: .sync), at: 0)
@@ -267,7 +265,6 @@ public final class Connection {
             p.then(.failure(.refused(code: code)))
         case (.sync, .synced):
             if records.finishSync(version: agreed ?? version) {
-                missedSince = nil
                 syncOwed = false
                 onEvent(.synced)
             }
@@ -305,7 +302,7 @@ public final class Connection {
         case .sync:
             // What was missed stays marked until a sync finishes: one refused, given up on or
             // abandoned asks again from the same place.
-            body = .sync(after: records.after(version: agreed ?? version, missedSince: missedSince))
+            body = .sync(after: records.after(version: agreed ?? version))
             records.beginSync()
         }
         seq &+= 1

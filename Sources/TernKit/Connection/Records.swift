@@ -77,6 +77,10 @@ public struct Records: Equatable, Sendable {
     /// The version both ends spoke at the last sync that finished, nil if none has. A node may
     /// hold records a client of an earlier version was never sent, under `id`s below ones it was.
     public var syncedVersion: UInt8?
+    /// The greatest `id` held when news was first missed, until a sync that asked again from it
+    /// finishes; nil when nothing is missed. Kept with the records, not the connection: what was
+    /// lost may be below records received after it, in this run or the one before.
+    public var missedSince: UInt32?
 
     /// What the sync under way has sent of the three lists a sync gives whole.
     private var syncing: (contacts: Set<Address>, groups: Set<GroupID>, neighbours: Set<UInt32>)?
@@ -86,7 +90,7 @@ public struct Records: Equatable, Sendable {
     public static func == (a: Records, b: Records) -> Bool {
         a.me == b.me && a.contacts == b.contacts && a.groups == b.groups && a.items == b.items
             && a.neighbours == b.neighbours && a.airtime == b.airtime && a.power == b.power
-            && a.syncedVersion == b.syncedVersion
+            && a.syncedVersion == b.syncedVersion && a.missedSince == b.missedSince
     }
 
     /// The items in the order the node gave them `id`s.
@@ -130,10 +134,9 @@ public struct Records: Equatable, Sendable {
     }
 
     /// The `after` to sync with. Normally the greatest `id` held. After missed news, one less than
-    /// the least `id` whose state may have changed unseen, and never more than `missedSince`, the
-    /// greatest `id` held when news was first missed: what was lost may be below records received
-    /// after it. Speaking a later version to the node than at the last sync, 0, once.
-    public func after(version: UInt8, missedSince: UInt32? = nil) -> UInt32 {
+    /// the least `id` whose state may have changed unseen, and never more than `missedSince`.
+    /// Speaking a later version to the node than at the last sync, 0, once.
+    public func after(version: UInt8) -> UInt32 {
         guard let synced = syncedVersion, synced >= version else { return 0 }
         guard let floor = missedSince else { return greatest }
         let least = items.values.filter(\.mayChange).map(\.id).min()
@@ -142,6 +145,11 @@ public struct Records: Equatable, Sendable {
 
     /// The greatest `id` held, 0 for none.
     public var greatest: UInt32 { items.keys.max() ?? 0 }
+
+    /// News was missed: the next sync reaches back to what is held now, or to where it already did.
+    mutating func missed() {
+        missedSince = min(missedSince ?? .max, greatest)
+    }
 
     mutating func beginSync() {
         syncing = ([], [], [])
@@ -156,6 +164,7 @@ public struct Records: Equatable, Sendable {
         if version >= 2 { groups = groups.filter { seen.groups.contains($0.key) } }
         neighbours = neighbours.filter { seen.neighbours.contains($0.key) }
         syncedVersion = version
+        missedSince = nil
         syncing = nil
         return true
     }
