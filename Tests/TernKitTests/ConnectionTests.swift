@@ -151,6 +151,24 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(node.connection.agreed, 2)
     }
 
+    /// Opening again fails what was held only once the new HELLO is out, so a callback that opens
+    /// again too sends no second one: one request at a time holds.
+    func testOpeningAgainFromTheCallbackOfARequestOpeningClosed() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        var result: Result<Body, RequestFailure>?
+        node.connection.submit(.ping) {
+            result = $0
+            node.connection.open()
+        }
+        _ = node.sent.removeFirst()
+        node.connection.open()
+        XCTAssertEqual(result, .failure(.closed))
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["HELLO"])
+        XCTAssertEqual(node.answerAll().map(\.name), ["HELLO", "SET_TIME", "SYNC"])
+    }
+
     func testEachNewsFrameOfASyncStartsTheWaitAgain() throws {
         let node = Node()
         node.connection.open()

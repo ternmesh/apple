@@ -106,19 +106,24 @@ public final class Connection {
 
     /// Starts the conversation on a link that has just opened: `HELLO`, then the clock and a sync.
     /// Requests made before the node answers wait for it.
+    /// Opening again while a `HELLO` is unanswered does nothing; after the link drops, `close()`
+    /// first. Requests the connection held from before fail with `.closed`, once the new `HELLO`
+    /// is sent: a callback that opens again finds it opening already.
     public func open() {
-        if phase != .closed { close() }
+        guard phase != .greeting else { return }
+        let old = takeAll()
         phase = .greeting
         nodeVersion = nil
         firmware = nil
         hello()
+        for p in old { p.then(.failure(.closed)) }
     }
 
     /// The link closed. Every request not yet answered fails with `.closed`.
     public func close() {
         phase = .closed
         records.abandonSync()
-        failAll(.closed)
+        for p in takeAll() { p.then(.failure(.closed)) }
     }
 
     /// Asks the node for anything it holds that this client may not.
@@ -326,10 +331,12 @@ public final class Connection {
         send(bytes)
     }
 
-    private func failAll(_ failure: RequestFailure) {
+    /// Every request held, unanswered or waiting, which the connection then no longer holds. A
+    /// caller fails them only once its own state is settled, since a callback may open again.
+    private func takeAll() -> [Pending] {
         let pending = (inFlight.map { [$0.pending] } ?? []) + queue
         inFlight = nil
         queue = []
-        for p in pending { p.then(.failure(failure)) }
+        return pending
     }
 }
