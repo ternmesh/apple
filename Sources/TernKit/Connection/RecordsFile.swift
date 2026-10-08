@@ -54,7 +54,11 @@ extension Records {
     /// holding half of it as if it were the whole.
     public init(decoding bytes: [UInt8]) {
         self.init()
-        guard bytes.count >= 11, Array(bytes[0..<4]) == Records.fileMagic, bytes[4] == Records.fileFormat else {
+        // A synced version this client does not speak, or a flag that is neither 0 nor 1, is a
+        // spoiled file too: trusting it would sync from where it says, past what it lost.
+        guard bytes.count >= 11, Array(bytes[0..<4]) == Records.fileMagic, bytes[4] == Records.fileFormat,
+              bytes[5] == 0xFF || bytes[5] <= Companion.version, bytes[6] <= 1
+        else {
             return
         }
         var r = Records()

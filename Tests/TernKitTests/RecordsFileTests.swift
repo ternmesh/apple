@@ -77,6 +77,12 @@ final class RecordsFileTests: XCTestCase {
         format[4] = 2
         XCTAssertEqual(Records(decoding: format), Records(), "a format this app does not know")
         XCTAssertEqual(Records(decoding: Array(good.dropLast())), Records(), "an entry cut short")
+        var synced = good
+        synced[5] = Companion.version + 1
+        XCTAssertEqual(Records(decoding: synced), Records(), "synced at a version this client does not speak")
+        var flag = good
+        flag[6] = 2
+        XCTAssertEqual(Records(decoding: flag), Records(), "a missed flag neither 0 nor 1")
         // A frame that reads but is not a record.
         let ok = try Frame(seq: 0, body: .ok).encode()
         XCTAssertEqual(Records(decoding: good + [UInt8(ok.count)] + ok), Records(), "not a record")
