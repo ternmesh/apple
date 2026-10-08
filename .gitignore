@@ -4,3 +4,6 @@
 DerivedData/
 xcuserdata/
 *.xcuserstate
+
+# Written by `xcodegen` from project.yml.
+Tern.xcodeproj/
