@@ -1,0 +1,376 @@
+// The connection, as the client in the specification's exchanges, and its timers and recovery
+// against a node played by hand.
+
+import XCTest
+
+@testable import TernKit
+
+final class ConnectionTests: XCTestCase {
+    var v: [String: JSON] { CompanionVectorTests.vectors }
+
+    // MARK: The specification's connections, from the client's side
+
+    /// The client sends the exchange's frames, byte for byte, each only once the one before it is
+    /// answered, and ends holding what the node's news said.
+    func testExchange() throws {
+        let frames = v["exchange"]!.array
+        let setTime = try XCTUnwrap(frames.first { $0["type"]!.string == "SET_TIME" })
+        guard case let .setTime(time) = try Frame.decode(setTime["frame"]!.bytes).body else { return XCTFail() }
+
+        let link = Link(Connection(now: { 0 }, wallTime: { time }))
+        let answers = link.replay(frames)
+
+        XCTAssertEqual(answers.count, 11)
+        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 11, "every request answered")
+        let r = link.connection.records
+        XCTAssertEqual(r.me?.region, "EU868")
+        XCTAssertEqual(r.syncedVersion, 2)
+        XCTAssertEqual(r.contacts.values.map(\.name).sorted(), ["Bob", "Carol"])
+        XCTAssertEqual(r.contacts.values.map(\.session), [0, 0], "Bob's session ended; Carol never had one")
+        XCTAssertEqual(r.groups.values.map(\.name), ["Ridge walkers"], "the group made was left, the one joined renamed")
+        XCTAssertEqual(r.items.keys.sorted(), Array(17...22))
+        XCTAssertEqual(r.ordered.filter(\.isUnread), [], "READ marked the message, group message and invite read")
+        XCTAssertEqual(r.items[18]?.state, MessageState.delivered)
+        XCTAssertEqual(r.items[20]?.state, MessageState.sent)
+        XCTAssertEqual(r.neighbours.count, 1)
+        XCTAssertEqual(link.events.filter { if case .news(.asked) = $0 { true } else { false } }.count, 1)
+    }
+
+    /// A client of version 0 that holds messages through 17 asks only for those after them, and
+    /// sets no clock when it has none to give.
+    func testOlderVersion0() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 0 }!
+        var held = Records()
+        held.items[17] = .message(Message(
+            id: 17, contact: Address([UInt8](repeating: 1, count: 32))!, time: 0, flags: 1,
+            state: MessageState.received, reason: 0, wait: 0, text: "x"))
+        held.syncedVersion = 0
+        let link = Link(Connection(version: 0, records: held, now: { 0 }, wallTime: nil))
+        let answers = link.replay(older["frames"]!.array)
+        XCTAssertEqual(answers.count, 1)
+        XCTAssertEqual(link.connection.agreed, 0)
+        XCTAssertEqual(link.connection.records.contacts.count, 2)
+    }
+
+    /// A client of version 1 speaks version 1 to a node of version 2, and does not send a request
+    /// version 1 does not define: it fails here, with nothing on the link.
+    func testOlderVersion1AndTheRequestItMustNotSend() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 1 }!
+        let frames = older["frames"]!.array
+        let link = Link(Connection(version: 1, now: { 0 }, wallTime: nil))
+        _ = link.replay(Array(frames.dropLast(2)))
+        XCTAssertEqual(frames[frames.count - 2]["type"]!.string, "MAKE_GROUP")
+
+        var result: Result<Body, RequestFailure>?
+        link.connection.submit(.makeGroup(name: "Hut")) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(link.out, [])
+        XCTAssertEqual(link.connection.records.items.count, 3)
+    }
+
+    /// A client of version 2 talking to a node of version 1 does the same.
+    func testANodeOfAnEarlierVersionIsNotAskedWhatItCannotDo() throws {
+        let node = Node()
+        node.version = 1
+        node.connection.open()
+        node.answerAll()
+        XCTAssertEqual(node.connection.agreed, 1)
+        var result: Result<Body, RequestFailure>?
+        node.connection.submit(.join(id: 3)) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        node.connection.submit(.endSession(address: Node.bob)) { result = $0 }
+        node.answerAll()
+        XCTAssertEqual(result, .success(.ok))
+    }
+
+    // MARK: One request at a time
+
+    func testOneRequestAtATime() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        var answered = 0
+        for _ in 0..<3 { node.connection.submit(.ping) { _ in answered += 1 } }
+        XCTAssertEqual(node.sent.count, 1)
+        node.answerOne()
+        XCTAssertEqual(node.sent.count, 1)
+        node.answerAll()
+        XCTAssertEqual(answered, 3)
+    }
+
+    func testAnAnswerWithAnotherSeqIsIgnored() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        var result: Result<Body, RequestFailure>?
+        node.connection.submit(.read(through: 4)) { result = $0 }
+        let request = try Frame.decode(node.sent.removeFirst())
+        node.connection.receive(try Frame(seq: request.seq &- 1, body: .ok).encode())
+        XCTAssertNil(result)
+        node.connection.receive(try Frame(seq: request.seq, body: .ok).encode())
+        XCTAssertEqual(result, .success(.ok))
+    }
+
+    // MARK: Timers
+
+    func testNoAnswerWithinTheWaitAndTheNodeIsGone() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        var first: Result<Body, RequestFailure>?
+        var second: Result<Body, RequestFailure>?
+        node.connection.submit(.ping) { first = $0 }
+        node.connection.submit(.ping) { second = $0 }
+        node.time += Companion.answerWait - 0.1
+        node.connection.tick()
+        XCTAssertNil(first)
+        node.time += 0.1
+        node.connection.tick()
+        XCTAssertEqual(first, .failure(.noAnswer))
+        XCTAssertEqual(second, .failure(.closed))
+        XCTAssertEqual(node.events.last, .gone)
+        XCTAssertNil(node.connection.nextDeadline)
+    }
+
+    func testEachNewsFrameOfASyncStartsTheWaitAgain() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerOne()  // INFO
+        node.answerOne()  // OK to SET_TIME
+        _ = node.sent.removeFirst()  // SYNC, left unanswered
+        for _ in 0..<3 {
+            node.time += Companion.answerWait - 1
+            node.news(.power(Power(millivolts: 3900, percent: 80, flags: 0)))
+            node.connection.tick()
+        }
+        XCTAssertFalse(node.events.contains(.gone))
+        node.time += Companion.answerWait
+        node.connection.tick()
+        XCTAssertEqual(node.events.last, .gone)
+    }
+
+    func testAPingWhenNothingWasAskedForIdleSeconds() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        XCTAssertEqual(node.connection.nextDeadline, Companion.idle)
+        node.time = Companion.idle - 1
+        node.news(.power(Power(millivolts: 3900, percent: 80, flags: 0)))  // news is not an answer
+        node.connection.tick()
+        XCTAssertEqual(node.sent, [])
+        node.time = Companion.idle
+        node.connection.tick()
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.ping])
+    }
+
+    // MARK: Counted news, and syncing again
+
+    func testMissedNewsSyncsFromTheLeastMessageWhoseStateMayHaveChanged() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerOne()
+        node.answerOne()
+        _ = node.sent.removeFirst()
+        node.news(.message(Node.message(id: 5, state: MessageState.delivered)))
+        node.news(.message(Node.message(id: 7, state: MessageState.sent)))
+        node.news(.groupMessage(Node.groupMessage(id: 6, state: MessageState.sent)))
+        node.news(.message(Node.message(id: 9, state: MessageState.received)))
+        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+        XCTAssertEqual(node.connection.records.syncedVersion, 2)
+
+        node.newsCount &+= 1  // one lost
+        node.news(.state(MessageState(id: 9, state: MessageState.received, reason: 0, wait: 0)))
+        // A sent message may have been delivered since; a sent group message stays sent.
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 6)])
+    }
+
+    func testWithNothingThatMayChangeItSyncsFromTheGreatest() throws {
+        var r = Records()
+        r.syncedVersion = 2
+        r.items[4] = .message(Node.message(id: 4, state: MessageState.delivered))
+        r.items[8] = .groupMessage(Node.groupMessage(id: 8, state: MessageState.sent))
+        XCTAssertEqual(r.after(version: 2, missed: true), 8)
+        XCTAssertEqual(r.after(version: 2, missed: false), 8)
+        // Speaking a later version than at the last sync: everything, once.
+        r.syncedVersion = 1
+        XCTAssertEqual(r.after(version: 2, missed: false), 0)
+    }
+
+    func testNewsOfATypeThisClientDoesNotKnowIsCountedAndIgnored() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        let before = node.connection.records
+        node.connection.receive([0xBF, node.newsCount, 1, 2, 3])
+        node.newsCount &+= 1
+        node.news(.power(Power(millivolts: 3900, percent: 80, flags: 0)))
+        XCTAssertEqual(node.sent, [], "no sync: nothing was missed")
+        XCTAssertNotEqual(node.connection.records, before)
+    }
+
+    func testASyncIsTheWholeListOfContactsGroupsAndNeighboursButNotOfMessages() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerOne()
+        node.answerOne()
+        _ = node.sent.removeFirst()
+        node.news(.contact(Contact(address: Node.bob, session: 1, name: "Bob")))
+        node.news(.contact(Contact(address: Node.carol, session: 0, name: "Carol")))
+        node.news(.group(Group(group: Node.hut, name: "Hut")))
+        node.news(.neighbour(Neighbour(routingId: 7, role: 1, snrQuarterDb: 20, heard: 3)))
+        node.news(.message(Node.message(id: 3, state: MessageState.received)))
+        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+
+        node.connection.resync()
+        _ = node.sent.removeFirst()
+        node.news(.contact(Contact(address: Node.bob, session: 1, name: "Bob")))
+        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+        let r = node.connection.records
+        XCTAssertEqual(Array(r.contacts.keys), [Node.bob])
+        XCTAssertEqual(r.groups, [:])
+        XCTAssertEqual(r.neighbours, [:])
+        XCTAssertEqual(Array(r.items.keys), [3])
+    }
+
+    // MARK: Taken for gone
+
+    func testError6StartsAgainAndAsksOnceMore() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        var result: Result<Body, RequestFailure>?
+        node.connection.submit(.saveContact(address: Node.carol, name: "Carol")) { result = $0 }
+        let refused = try Frame.decode(node.sent.removeFirst())
+        node.connection.receive(try Frame(seq: refused.seq, body: .error(code: ErrorCode.helloFirst)).encode())
+        XCTAssertNil(result)
+        let again = node.answerAll()
+        XCTAssertEqual(again.map(\.name), ["HELLO", "SET_TIME", "SYNC", "SAVE_CONTACT"])
+        XCTAssertEqual(result, .success(.ok))
+    }
+
+    func testAHelloRefusedForTheMTU() throws {
+        let node = Node()
+        node.connection.open()
+        let hello = try Frame.decode(node.sent.removeFirst())
+        node.connection.receive(try Frame(seq: hello.seq, body: .error(code: ErrorCode.mtu)).encode())
+        XCTAssertEqual(node.events, [.refused(code: ErrorCode.mtu)])
+        var result: Result<Body, RequestFailure>?
+        node.connection.submit(.ping) { result = $0 }
+        XCTAssertEqual(result, .failure(.closed))
+    }
+
+    func testSendingAgainWithTheSameRef() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        let ref = node.connection.sendMessage("On my way", to: Node.bob)
+        node.connection.sendMessage("On my way", to: Node.bob, ref: ref)
+        let sent = node.answerAll()
+        guard case let .send(a, _, _) = sent[0], case let .send(b, _, _) = sent[1] else { return XCTFail() }
+        XCTAssertEqual(a, b)
+        var result: Result<Body, RequestFailure>?
+        node.connection.sendMessage(String(repeating: "x", count: 129), to: Node.bob) { result = $0 }
+        XCTAssertEqual(result, .failure(.invalid(.tooLong(field: "text", limit: 128))))
+        XCTAssertEqual(node.sent, [])
+    }
+}
+
+/// A connection with its frames caught, and a replay of the specification's.
+private final class Link {
+    let connection: Connection
+    var out: [[UInt8]] = []
+    var events: [ConnectionEvent] = []
+
+    init(_ connection: Connection) {
+        self.connection = connection
+        connection.send = { [unowned self] in out.append($0) }
+        connection.onEvent = { [unowned self] in events.append($0) }
+    }
+
+    /// Plays the node's half of `frames`, having asked for the client's requests up front, and
+    /// checks the client sends its half in order and never two requests at once. Returns each
+    /// request's answer.
+    func replay(_ frames: [JSON], file: StaticString = #filePath, line: UInt = #line) -> [Result<Body, RequestFailure>] {
+        var answers: [Result<Body, RequestFailure>] = []
+        connection.open()
+        for f in frames where f["from"]!.string == "client" {
+            let body = try! Frame.decode(f["frame"]!.bytes).body
+            switch body {
+            case .hello, .sync, .setTime: continue
+            default: connection.submit(body) { answers.append($0) }
+            }
+        }
+        for f in frames {
+            XCTAssertLessThanOrEqual(out.count, 1, "two requests at once", file: file, line: line)
+            if f["from"]!.string == "client" {
+                XCTAssertEqual(out.first.map(Hex.encode), f["frame"]!.string, f["type"]!.string, file: file, line: line)
+                if !out.isEmpty { out.removeFirst() }
+            } else {
+                connection.receive(f["frame"]!.bytes)
+            }
+        }
+        XCTAssertEqual(out, [], file: file, line: line)
+        return answers
+    }
+}
+
+/// A node played by hand: it answers each request as a node with nothing to report would, and
+/// sends news when told to.
+private final class Node {
+    static let bob = Address([UInt8](repeating: 0xB0, count: 32))!
+    static let carol = Address([UInt8](repeating: 0xCA, count: 32))!
+    static let hut = GroupID([UInt8](repeating: 0x48, count: 8))!
+
+    var time = 0.0
+    var version: UInt8 = 2
+    var newsCount: UInt8 = 0
+    var sent: [[UInt8]] = []
+    var events: [ConnectionEvent] = []
+    /// The seq of the last request.
+    var seq: UInt8 = 0
+    lazy var connection: Connection = {
+        let c = Connection(now: { [unowned self] in time }, wallTime: { 1_790_000_000 })
+        c.send = { [unowned self] in sent.append($0); seq = $0[1] }
+        c.onEvent = { [unowned self] in events.append($0) }
+        return c
+    }()
+
+    func news(_ body: Body) {
+        connection.receive(try! Frame(seq: newsCount, body: body).encode())
+        newsCount &+= 1
+    }
+
+    /// Answers the oldest request sent.
+    @discardableResult
+    func answerOne() -> Body {
+        let request = try! Frame.decode(sent.removeFirst())
+        let answer: Body
+        switch request.body {
+        case .hello:
+            newsCount = 0
+            answer = .info(version: version, firmware: "test")
+        case .sync: answer = .synced
+        case .send, .sendGroup, .sendInvite: answer = .queued(id: 1)
+        case .makeGroup: answer = .made(group: Node.hut)
+        default: answer = .ok
+        }
+        connection.receive(try! Frame(seq: request.seq, body: answer).encode())
+        return request.body
+    }
+
+    /// Answers until nothing is waiting; returns what was asked.
+    @discardableResult
+    func answerAll() -> [Body] {
+        var asked: [Body] = []
+        while !sent.isEmpty { asked.append(answerOne()) }
+        return asked
+    }
+
+    static func message(id: UInt32, state: UInt8) -> Message {
+        Message(id: id, contact: bob, time: 0, flags: 0, state: state, reason: 0, wait: 0, text: "x")
+    }
+
+    static func groupMessage(id: UInt32, state: UInt8) -> GroupMessage {
+        GroupMessage(id: id, group: hut, from: 0, time: 0, flags: 0, state: state, reason: 0, wait: 0, text: "x")
+    }
+}
