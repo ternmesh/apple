@@ -24,7 +24,7 @@ struct ChatsView: View {
                         AskedView()
                     } label: {
                         Label(
-                            "\(model.asked.count) not in your contacts tried to reach you",
+                            model.asked.count == 1 ? "1 attempt to reach you was turned away" : "\(model.asked.count) attempts to reach you were turned away",
                             systemImage: "person.crop.circle.badge.questionmark")
                     }
                 }
