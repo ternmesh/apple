@@ -337,7 +337,14 @@ final class NodeModel: ObservableObject {
         guard canWrite, let c = link.connection, let through = records.readThrough(seen: seen), through != reading
         else { return }
         reading = through
-        c.submit(.read(through: through)) { [weak self] _ in self?.reading = nil }
+        c.submit(.read(through: through)) { [weak self] result in
+            self?.reading = nil
+            // Refused (not now) or unanswered: ask again shortly, or what is on screen stays unread
+            // until something else happens. A closed link asks again when it opens.
+            if case let .failure(f) = result, f != .closed {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self?.markRead() }
+            }
+        }
     }
 
     private func notify(_ body: Body) {
