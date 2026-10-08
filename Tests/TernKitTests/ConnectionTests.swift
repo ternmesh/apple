@@ -240,6 +240,34 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 4)])
     }
 
+    /// A sync that comes to nothing leaves what was missed marked: after ERROR 6 and a new HELLO,
+    /// the next sync asks from 10 again, not from the 12 heard of since.
+    func testWhatWasMissedStaysMarkedUntilASyncFinishes() throws {
+        let node = try synced(holding: [Node.message(id: 10, state: MessageState.delivered)])
+        node.newsCount &+= 1  // MESSAGE 11, lost
+        node.news(.message(Node.message(id: 12, state: MessageState.delivered)))
+        let sync = try Frame.decode(node.sent.removeFirst())
+        XCTAssertEqual(sync.body, .sync(after: 10))
+        node.connection.receive(try Frame(seq: sync.seq, body: .error(code: ErrorCode.helloFirst)).encode())
+        node.answerOne()  // INFO
+        node.answerOne()  // OK to SET_TIME
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 10)])
+    }
+
+    /// A client away from the node missed every change made meanwhile: a connection's first sync
+    /// reaches back to the oldest message whose state may have changed.
+    func testAConnectionStartsAsIfNewsWereMissed() throws {
+        let node = try synced(holding: [
+            Node.message(id: 5, state: MessageState.sent),
+            Node.message(id: 8, state: MessageState.delivered),
+        ])
+        node.connection.close()
+        node.connection.open()
+        node.answerOne()  // INFO
+        node.answerOne()  // OK to SET_TIME
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 4)])
+    }
+
     /// A sync that missed some of its news proves nothing about what is gone: the next one does.
     func testASyncThatMissedNewsForgetsNothing() throws {
         let node = Node()

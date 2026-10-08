@@ -68,7 +68,8 @@ public final class Connection {
     private var phase = Phase.closed
     private var seq: UInt8 = 0
     private var expectedNews: UInt8 = 0
-    /// The greatest `id` held when news was first missed, until a sync asks again from it.
+    /// The greatest `id` held when news was first missed, until a sync that asked again from it
+    /// finishes. A connection that starts has missed whatever changed while there was none.
     private var missedSince: UInt32?
     private var syncWanted = false
     private var queue: [Pending] = []
@@ -231,7 +232,7 @@ public final class Connection {
             firmware = fw
             phase = .open
             expectedNews = 0
-            missedSince = nil
+            missedSince = min(missedSince ?? .max, records.greatest)
             syncWanted = false
             queue.insert(Pending(kind: .sync), at: 0)
             if wallTime != nil { queue.insert(Pending(kind: .setTime), at: 0) }
@@ -255,7 +256,10 @@ public final class Connection {
             if p.isSync { records.abandonSync() }
             p.then(.failure(.refused(code: code)))
         case (.sync, .synced):
-            if records.finishSync(version: agreed ?? version) { onEvent(.synced) }
+            if records.finishSync(version: agreed ?? version) {
+                missedSince = nil
+                onEvent(.synced)
+            }
             p.then(.success(body))
         default:
             p.then(.success(body))
@@ -288,8 +292,9 @@ public final class Connection {
         case .setTime: body = .setTime(wallTime?() ?? 0)
         case .ping: body = .ping
         case .sync:
+            // What was missed stays marked until a sync finishes: one refused, given up on or
+            // abandoned asks again from the same place.
             body = .sync(after: records.after(version: agreed ?? version, missedSince: missedSince))
-            missedSince = nil
             records.beginSync()
         }
         seq &+= 1
