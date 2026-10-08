@@ -170,11 +170,15 @@ public final class Connection {
         let t = now()
         if let f = inFlight {
             guard t >= f.deadline else { return }
+            // Everything is cleared before any callback runs, so one that opens again at once
+            // keeps what it opens.
             phase = .closed
             records.abandonSync()
+            let queued = queue
             inFlight = nil
+            queue = []
             f.pending.then(.failure(.noAnswer))
-            failAll(.closed)
+            for p in queued { p.then(.failure(.closed)) }
             onEvent(.gone)
         } else if phase == .open, t >= lastAnswer + Companion.idle {
             transmit(Pending(kind: .ping))

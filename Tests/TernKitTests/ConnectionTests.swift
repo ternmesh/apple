@@ -132,6 +132,20 @@ final class ConnectionTests: XCTestCase {
         XCTAssertNil(node.connection.nextDeadline)
     }
 
+    /// An app that opens again from the timed-out request's callback keeps the HELLO it sent.
+    func testOpeningAgainFromTheCallbackOfARequestGivenUpOn() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        node.connection.submit(.ping) { _ in node.connection.open() }
+        node.connection.submit(.ping)
+        _ = node.sent.removeFirst()
+        node.time += Companion.answerWait
+        node.connection.tick()
+        XCTAssertEqual(node.answerAll().map(\.name), ["HELLO", "SET_TIME", "SYNC"])
+        XCTAssertEqual(node.connection.agreed, 2)
+    }
+
     func testEachNewsFrameOfASyncStartsTheWaitAgain() throws {
         let node = Node()
         node.connection.open()
