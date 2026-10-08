@@ -150,10 +150,15 @@ final class NodeModel: ObservableObject {
 
     var isConnected: Bool { linkState == .ready || linkState == .syncing }
 
+    /// Whether a message may be written now. Not while the first sync is under way: what the app
+    /// holds is not yet the node's, and the `after` a send is matched from must be.
+    var canWrite: Bool { linkState == .ready }
+
     // MARK: Messages
 
     /// Sends `text` to the conversation `peer`, under a new `ref`.
     func send(_ text: String, to peer: Peer) {
+        guard canWrite else { return }
         // The same text to the same peer while one is unresolved is that one again, under its ref:
         // two the node could not tell apart would leave a sync unable to say which of them went.
         if let o = outgoing.first(where: { $0.peer == peer && $0.text == text }) {
@@ -168,7 +173,7 @@ final class NodeModel: ObservableObject {
     /// Sends again what got no answer, with the same `ref`: the node sends it once whatever became
     /// of the first try.
     func resend(_ o: Outgoing) {
-        guard let i = outgoing.firstIndex(where: { $0.ref == o.ref }) else { return }
+        guard canWrite, let i = outgoing.firstIndex(where: { $0.ref == o.ref }) else { return }
         // The node holds it: it went, and the ref may since have left the node's memory.
         if records.holdsSent(o.text, to: o.peer, after: o.after) { return discard(o) }
         outgoing[i].status = .sending
@@ -266,10 +271,10 @@ final class NodeModel: ObservableObject {
             agreed = link.connection?.agreed
         case let .news(body):
             if case let .asked(address, why) = body {
-                if records.contacts[address] == nil {
-                    asked.removeAll { $0.address == address }
-                    asked.insert(Asked(address: address, why: why, when: Date()), at: 0)
-                }
+                // A saved contact turned away for want of room is news too: only the offer to save
+                // it is left out.
+                asked.removeAll { $0.address == address }
+                asked.insert(Asked(address: address, why: why, when: Date()), at: 0)
             } else if !isActive, records.isArrival(body) {
                 notify(body)
             }

@@ -103,8 +103,10 @@ struct AskedSection: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack {
-                            Button("Save as Contact") { saving = a }
-                            .disabled(!model.isConnected)
+                            if model.records.contacts[a.address] == nil {
+                                Button("Save as Contact") { saving = a }
+                                    .disabled(!model.isConnected)
+                            }
                             Button("Dismiss") { model.dismissAsked(a) }
                         }
                         .buttonStyle(.bordered)

@@ -108,7 +108,7 @@ struct ChatView: View {
 
     private var canSend: Bool {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.isConnected && !text.isEmpty && Words.textBytes(text) <= Companion.textMax
+        return model.canWrite && !text.isEmpty && Words.textBytes(text) <= Companion.textMax
     }
 
     private func send() {
@@ -288,7 +288,7 @@ struct OutgoingBubble: View {
                         Text("The node did not answer.").font(.caption2).foregroundStyle(.secondary)
                         Button("Retry") { model.resend(outgoing) }
                             .font(.caption)
-                            .disabled(!model.isConnected)
+                            .disabled(!model.canWrite)
                         Button("Discard", role: .destructive) { model.discard(outgoing) }
                             .font(.caption)
                     }
