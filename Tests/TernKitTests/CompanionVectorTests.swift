@@ -132,6 +132,10 @@ final class CompanionVectorTests: XCTestCase {
         let end = try Frame(seq: 1, body: .endSession(address: Address([UInt8](repeating: 1, count: 32))!)).encode()
         XCTAssertThrowsError(try Frame.decode(end, version: 0)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
         XCTAssertNoThrow(try Frame.decode(end, version: 1))
+        // Undefined before its fields are read: cut short, it is still a type the version lacks.
+        XCTAssertThrowsError(try Frame.decode([0x1A, 1], version: 0)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertThrowsError(try Frame.decode([0x1A, 1], version: 1)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
+        XCTAssertThrowsError(try Frame.decode([0x8A, 1], version: 1)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
     }
 
     func testAFrameThatNeverFinishesIsGivenUpAsText() {

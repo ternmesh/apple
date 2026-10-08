@@ -156,6 +156,8 @@ extension Frame {
     public static func decode(_ bytes: [UInt8], version: UInt8 = Companion.version) throws -> Frame {
         guard bytes.count >= 2 else { throw DecodeError.short }
         guard bytes.count <= Companion.maxFrame else { throw DecodeError.malformed }
+        // A type the version spoken does not define is undefined however its fields read.
+        guard Companion.since(type: bytes[0]) <= version else { throw DecodeError.undefined }
         var r = Reader(bytes: bytes, at: 2)
         let body: Body
         switch bytes[0] {
@@ -221,7 +223,6 @@ extension Frame {
                 state: try r.u8(), reason: try r.u8(), wait: try r.u16(), name: try r.str(limit: Companion.nameMax)))
         default: throw DecodeError.undefined
         }
-        guard body.since <= version else { throw DecodeError.undefined }
         return Frame(seq: bytes[1], body: body)
     }
 

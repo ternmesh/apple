@@ -5,9 +5,18 @@
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 1 is this without groups, and version 0 is
-    /// version 1 without `END_SESSION` and `ASKED`.
+    /// The version this client speaks. Version 2 is this without `SYNCED`'s `news`, version 1
+    /// is version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
     public static let version: UInt8 = 3
+
+    /// The least version that defines the frame type `type`.
+    public static func since(type: UInt8) -> UInt8 {
+        switch type {
+        case 0x1A, 0x89: 1
+        case 0x20...0x25, 0x45, 0x8A...0x8D: 2
+        default: 0
+        }
+    }
     public static let maxFrame = 180
     public static let textMax = 128
     public static let nameMax = 31
@@ -466,15 +475,7 @@ public enum Body: Equatable, Sendable {
 extension Body {
     /// The least version that defines this frame: a client sends no request the node's version
     /// does not define, and reads no frame the version both ends speak does not.
-    public var since: UInt8 {
-        switch self {
-        case .endSession, .asked: 1
-        case .makeGroup, .leaveGroup, .nameGroup, .sendGroup, .sendInvite, .join, .made, .group, .groupGone,
-            .groupMessage, .invite:
-            2
-        default: 0
-        }
-    }
+    public var since: UInt8 { Companion.since(type: type) }
 }
 
 public extension UInt8 {
