@@ -1,0 +1,45 @@
+# The app, for XcodeGen: `xcodegen` writes Tern.xcodeproj from this, which is not committed.
+# One target for iPhone, iPad and Mac, on TernKit from this repository's own Package.swift.
+name: Tern
+options:
+  bundleIdPrefix: org.ternmesh
+  createIntermediateGroups: true
+packages:
+  TernKit:
+    path: .
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Tern:
+    type: application
+    platform: auto
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - path: App
+        excludes:
+          - Info.plist
+          - Tern.entitlements
+    dependencies:
+      - package: TernKit
+    settings:
+      base:
+        PRODUCT_NAME: Tern
+        PRODUCT_BUNDLE_IDENTIFIER: org.ternmesh.tern
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: App/Info.plist
+        INFOPLIST_KEY_CFBundleDisplayName: Tern
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.social-networking
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        # The Mac app is sandboxed, with Bluetooth let through. iOS needs no entitlement for it.
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": App/Tern.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+    scheme: {}
