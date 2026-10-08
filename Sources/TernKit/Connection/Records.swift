@@ -152,7 +152,8 @@ public struct Records: Equatable, Sendable {
     mutating func finishSync(version: UInt8) -> Bool {
         guard let seen = syncing else { return false }
         contacts = contacts.filter { seen.contacts.contains($0.key) }
-        groups = groups.filter { seen.groups.contains($0.key) }
+        // A sync of version 1 or earlier sends no groups: it says nothing of whether they are gone.
+        if version >= 2 { groups = groups.filter { seen.groups.contains($0.key) } }
         neighbours = neighbours.filter { seen.neighbours.contains($0.key) }
         syncedVersion = version
         syncing = nil

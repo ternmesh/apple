@@ -349,6 +349,19 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["SYNC"], "and it syncs again")
     }
 
+    /// Records kept from a version 2 connection, synced with a node that speaks an earlier
+    /// version, keep their groups: that sync could not have sent them.
+    func testASyncOfAnEarlierVersionKeepsTheGroups() {
+        var r = Records()
+        r.apply(.group(Group(group: Node.hut, name: "Hut")))
+        r.beginSync()
+        XCTAssertTrue(r.finishSync(version: 1))
+        XCTAssertEqual(Array(r.groups.keys), [Node.hut])
+        r.beginSync()
+        XCTAssertTrue(r.finishSync(version: 2))
+        XCTAssertEqual(r.groups, [:])
+    }
+
     func testNewsOfATypeThisClientDoesNotKnowIsCountedAndIgnored() throws {
         let node = Node()
         node.connection.open()
