@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The specification moves on its own: once a week, check this still conforms to it.
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  # TernKit uses only the standard library, so it is tested on Linux, which is quick, and on a
+  # Mac, which is what it ships on.
+  linux:
+    runs-on: ubuntu-24.04
+    container: swift:6.1
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+
+  # The tests above read this repository's copy of the vectors. This runs them against the
+  # specification's own, as it is on main today: it fails if the app no longer conforms, and says
+  # so if the copy is out of date.
+  specification:
+    runs-on: ubuntu-24.04
+    container: swift:6.1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ternmesh/spec
+          path: spec
+          sparse-checkout: vectors
+      - name: Use the specification's vectors
+        run: |
+          if ! cmp -s spec/vectors/companion.json Tests/TernKitTests/vectors/companion.json; then
+            echo "::warning::Tests/TernKitTests/vectors/companion.json differs from the specification's. Copy the new file in the pull request that changes the code to match."
+          fi
+          cp spec/vectors/companion.json Tests/TernKitTests/vectors/companion.json
+      - run: swift test
