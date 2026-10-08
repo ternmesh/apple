@@ -155,9 +155,15 @@ public final class Connection {
     /// One frame from the node.
     public func receive(_ bytes: [UInt8]) {
         guard phase != .closed, bytes.count >= 2 else { return }
-        let frame = try? Frame.decode(bytes)
+        var frame: Frame?
+        var malformed = false
+        do {
+            frame = try Frame.decode(bytes)
+        } catch DecodeError.malformed {
+            malformed = true
+        } catch {}
         if bytes[0].isNewsType {
-            news(seq: bytes[1], frame?.body)
+            news(seq: bytes[1], frame?.body, lost: malformed)
         } else if bytes[0].isAnswerType, let f = inFlight, bytes[1] == f.seq, let frame {
             // An answer whose seq is not the request's is to one given up on, and is ignored.
             answer(f.pending, frame.body)
@@ -193,10 +199,12 @@ public final class Connection {
         transmit(Pending(kind: .hello))
     }
 
-    private func news(seq: UInt8, _ body: Body?) {
+    /// - Parameter lost: the frame was news of a type this client knows that it could not read:
+    /// a record lost as surely as one never received.
+    private func news(seq: UInt8, _ body: Body?, lost: Bool) {
         guard phase == .open else { return }
         // News of a type this client does not know is ignored, but the node counted it.
-        if seq != expectedNews {
+        if seq != expectedNews || lost {
             // What was lost may be a record this sync would have sent: it no longer proves what
             // is gone, and the one after it will.
             if missedSince == nil { missedSince = records.greatest }

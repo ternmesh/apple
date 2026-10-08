@@ -231,6 +231,15 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 3)])
     }
 
+    /// News of a type this client knows that it cannot read is a record lost: it syncs again.
+    func testNewsItCannotReadIsNewsMissed() throws {
+        let node = try synced(holding: [Node.message(id: 4, state: MessageState.delivered)])
+        let message = try Frame(seq: node.newsCount, body: .message(Node.message(id: 5, state: MessageState.received))).encode()
+        node.connection.receive(Array(message.prefix(20)))
+        node.newsCount &+= 1
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 4)])
+    }
+
     /// A sync that missed some of its news proves nothing about what is gone: the next one does.
     func testASyncThatMissedNewsForgetsNothing() throws {
         let node = Node()
