@@ -6,6 +6,9 @@ import Combine
 import Foundation
 import TernKit
 import UserNotifications
+#if os(iOS)
+import UIKit
+#endif
 
 /// A message the user sent that the node has not yet said it holds. Once it answers `QUEUED`, the
 /// message is a record like any other and this goes.
@@ -43,7 +46,9 @@ final class NodeModel: ObservableObject {
     @Published private(set) var outgoing: [Outgoing] = [] {
         didSet { keepOutgoing() }
     }
-    @Published private(set) var asked: [Asked] = []
+    @Published private(set) var asked: [Asked] = [] {
+        didSet { keepAsked() }
+    }
     @Published private(set) var firmware: String?
     @Published private(set) var nodeVersion: UInt8?
     /// The version both ends speak, once the node has answered.
@@ -57,7 +62,9 @@ final class NodeModel: ObservableObject {
     }
 
     /// Whether the app is in front: notifications are only for when it is not.
-    var isActive = true {
+    /// iOS may launch the app in the background to restore its Bluetooth link, with no scene
+    /// becoming active: it starts as the application is, not as active.
+    var isActive = NodeModel.launchedActive {
         didSet {
             if isActive { markRead() } else { save() }
         }
@@ -76,6 +83,7 @@ final class NodeModel: ObservableObject {
         if let id = link.remembered {
             records = Self.load(id)
             outgoing = Self.loadOutgoing(id)
+            asked = Self.loadAsked(id)
         }
         conversations = records.conversations
         link.makeConnection = { [weak self] id in
@@ -104,7 +112,7 @@ final class NodeModel: ObservableObject {
             records = Self.load(node.id)
             conversations = records.conversations
             outgoing = Self.loadOutgoing(node.id)
-            asked = []
+            asked = Self.loadAsked(node.id)
         }
         remembered = node.id
         nodeName = node.name
@@ -116,12 +124,16 @@ final class NodeModel: ObservableObject {
 
     /// Forgets the node, and what the app kept of it.
     func forget() {
-        if let id = remembered {
+        // The node goes first: closing the link settles sends in flight, and with no node they
+        // are not written back under it.
+        let id = remembered
+        remembered = nil
+        link.forget()
+        if let id {
             try? FileManager.default.removeItem(at: Self.file(id))
             UserDefaults.standard.removeObject(forKey: Self.outgoingKey(id))
+            UserDefaults.standard.removeObject(forKey: Self.askedKey(id))
         }
-        link.forget()
-        remembered = nil
         nodeName = nil
         UserDefaults.standard.removeObject(forKey: Self.nameKey)
         records = Records()
@@ -323,6 +335,36 @@ final class NodeModel: ObservableObject {
             return ["ref": String(o.ref), "peer": peer, "text": o.text]
         }
         UserDefaults.standard.set(kept, forKey: Self.outgoingKey(id))
+    }
+
+    /// The node does not keep an `ASKED`, and a sync does not send it again: each is kept here
+    /// until the user saves the address or dismisses it.
+    private func keepAsked() {
+        guard let id = remembered else { return }
+        let kept = asked.map { a -> [String: String] in
+            ["address": a.address.description, "why": String(a.why), "when": String(a.when.timeIntervalSince1970)]
+        }
+        UserDefaults.standard.set(kept, forKey: Self.askedKey(id))
+    }
+
+    private static func askedKey(_ id: UUID) -> String { "org.ternmesh.tern.asked.\(id.uuidString)" }
+
+    private static func loadAsked(_ id: UUID) -> [Asked] {
+        let kept = UserDefaults.standard.array(forKey: askedKey(id)) as? [[String: String]] ?? []
+        return kept.compactMap { d in
+            guard let address = d["address"].flatMap(Address.init(hex:)), let why = d["why"].flatMap(UInt8.init),
+                  let when = d["when"].flatMap(Double.init)
+            else { return nil }
+            return Asked(address: address, why: why, when: Date(timeIntervalSince1970: when))
+        }
+    }
+
+    private static var launchedActive: Bool {
+        #if os(iOS)
+        UIApplication.shared.applicationState == .active
+        #else
+        true
+        #endif
     }
 
     private static func outgoingKey(_ id: UUID) -> String { "org.ternmesh.tern.outgoing.\(id.uuidString)" }
