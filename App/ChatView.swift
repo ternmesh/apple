@@ -113,8 +113,7 @@ struct ChatView: View {
 
     private func send() {
         guard canSend else { return }
-        model.send(draft.trimmingCharacters(in: .whitespacesAndNewlines), to: peer)
-        draft = ""
+        if model.send(draft.trimmingCharacters(in: .whitespacesAndNewlines), to: peer) { draft = "" }
     }
 
     // MARK: Toolbar

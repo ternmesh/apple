@@ -157,17 +157,25 @@ final class NodeModel: ObservableObject {
     // MARK: Messages
 
     /// Sends `text` to the conversation `peer`, under a new `ref`.
-    func send(_ text: String, to peer: Peer) {
-        guard canWrite else { return }
+    /// Returns whether it was taken: one the same as a send still in flight is not, and stays with
+    /// the writer.
+    @discardableResult
+    func send(_ text: String, to peer: Peer) -> Bool {
+        guard canWrite else { return false }
         // The same text to the same peer while one is unresolved is that one again, under its ref:
         // two the node could not tell apart would leave a sync unable to say which of them went.
         if let o = outgoing.first(where: { $0.peer == peer && $0.text == text }) {
-            if o.status != .sending { resend(o) }
-            return
+            guard o.status != .sending else {
+                problem = "Still sending the same message. Send it again once the node answers."
+                return false
+            }
+            resend(o)
+            return true
         }
         let ref = UInt32.random(in: 1...UInt32.max)
         outgoing.append(Outgoing(ref: ref, peer: peer, text: text, status: .sending, after: records.greatest))
         transmit(ref)
+        return true
     }
 
     /// Sends again what got no answer, with the same `ref`: the node sends it once whatever became
