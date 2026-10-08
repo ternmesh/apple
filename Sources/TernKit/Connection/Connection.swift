@@ -68,7 +68,8 @@ public final class Connection {
     private var phase = Phase.closed
     private var seq: UInt8 = 0
     private var expectedNews: UInt8 = 0
-    private var missedNews = false
+    /// The greatest `id` held when news was first missed, until a sync asks again from it.
+    private var missedSince: UInt32?
     private var syncWanted = false
     private var queue: [Pending] = []
     private var inFlight: (pending: Pending, seq: UInt8, deadline: Double)?
@@ -192,7 +193,10 @@ public final class Connection {
         guard phase == .open else { return }
         // News of a type this client does not know is ignored, but the node counted it.
         if seq != expectedNews {
-            missedNews = true
+            // What was lost may be a record this sync would have sent: it no longer proves what
+            // is gone, and the one after it will.
+            if missedSince == nil { missedSince = records.greatest }
+            records.abandonSync()
             syncWanted = true
         }
         expectedNews = seq &+ 1
@@ -215,7 +219,7 @@ public final class Connection {
             firmware = fw
             phase = .open
             expectedNews = 0
-            missedNews = false
+            missedSince = nil
             syncWanted = false
             queue.insert(Pending(kind: .sync), at: 0)
             if wallTime != nil { queue.insert(Pending(kind: .setTime), at: 0) }
@@ -239,8 +243,7 @@ public final class Connection {
             if p.isSync { records.abandonSync() }
             p.then(.failure(.refused(code: code)))
         case (.sync, .synced):
-            records.finishSync(version: agreed ?? version)
-            onEvent(.synced)
+            if records.finishSync(version: agreed ?? version) { onEvent(.synced) }
             p.then(.success(body))
         default:
             p.then(.success(body))
@@ -273,8 +276,8 @@ public final class Connection {
         case .setTime: body = .setTime(wallTime?() ?? 0)
         case .ping: body = .ping
         case .sync:
-            body = .sync(after: records.after(version: agreed ?? version, missed: missedNews))
-            missedNews = false
+            body = .sync(after: records.after(version: agreed ?? version, missedSince: missedSince))
+            missedSince = nil
             records.beginSync()
         }
         seq &+= 1

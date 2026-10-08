@@ -189,11 +189,53 @@ final class ConnectionTests: XCTestCase {
         r.syncedVersion = 2
         r.items[4] = .message(Node.message(id: 4, state: MessageState.delivered))
         r.items[8] = .groupMessage(Node.groupMessage(id: 8, state: MessageState.sent))
-        XCTAssertEqual(r.after(version: 2, missed: true), 8)
-        XCTAssertEqual(r.after(version: 2, missed: false), 8)
+        XCTAssertEqual(r.after(version: 2, missedSince: 8), 8)
+        XCTAssertEqual(r.after(version: 2), 8)
         // Speaking a later version than at the last sync: everything, once.
         r.syncedVersion = 1
-        XCTAssertEqual(r.after(version: 2, missed: false), 0)
+        XCTAssertEqual(r.after(version: 2), 0)
+    }
+
+    /// What was lost may be older than what came after it: losing 11 and then hearing of 12 asks
+    /// again from 10, not 12.
+    func testMissedNewsSyncsFromNoLaterThanWhatWasHeldBeforeTheGap() throws {
+        let node = try synced(holding: [Node.message(id: 10, state: MessageState.delivered)])
+        node.newsCount &+= 1  // MESSAGE 11, lost
+        node.news(.message(Node.message(id: 12, state: MessageState.received)))
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 10)])
+    }
+
+    /// Another client's READ may have been the news lost: a received message still unread is
+    /// asked for again.
+    func testMissedNewsSyncsFromAMessageStillUnread() throws {
+        let node = try synced(holding: [
+            Node.message(id: 4, state: MessageState.received),
+            Node.message(id: 5, state: MessageState.delivered),
+        ])
+        node.newsCount &+= 1  // MESSAGE 4, read, lost
+        node.news(.power(Power(millivolts: 3900, percent: 80, flags: 0)))
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body }, [.sync(after: 3)])
+    }
+
+    /// A sync that missed some of its news proves nothing about what is gone: the next one does.
+    func testASyncThatMissedNewsForgetsNothing() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerOne()
+        node.answerOne()
+        _ = node.sent.removeFirst()  // SYNC
+        node.news(.contact(Contact(address: Node.bob, session: 1, name: "Bob")))
+        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+        XCTAssertEqual(node.connection.records.contacts.count, 1)
+
+        node.connection.resync()
+        _ = node.sent.removeFirst()
+        node.newsCount &+= 1  // CONTACT Bob, lost
+        node.news(.power(Power(millivolts: 3900, percent: 80, flags: 0)))
+        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+        XCTAssertEqual(node.connection.records.contacts.count, 1, "Bob is not taken for gone")
+        XCTAssertEqual(node.events.filter { $0 == .synced }.count, 1)
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["SYNC"], "and it syncs again")
     }
 
     func testNewsOfATypeThisClientDoesNotKnowIsCountedAndIgnored() throws {
@@ -272,6 +314,21 @@ final class ConnectionTests: XCTestCase {
         node.connection.sendMessage(String(repeating: "x", count: 129), to: Node.bob) { result = $0 }
         XCTAssertEqual(result, .failure(.invalid(.tooLong(field: "text", limit: 128))))
         XCTAssertEqual(node.sent, [])
+    }
+}
+
+extension ConnectionTests {
+    /// A node and a connection to it that has synced, the node holding `messages`.
+    fileprivate func synced(holding messages: [Message]) throws -> Node {
+        let node = Node()
+        node.connection.open()
+        node.answerOne()
+        node.answerOne()
+        _ = node.sent.removeFirst()
+        for m in messages { node.news(.message(m)) }
+        node.connection.receive(try Frame(seq: node.seq, body: .synced).encode())
+        XCTAssertEqual(node.sent, [])
+        return node
     }
 }
 

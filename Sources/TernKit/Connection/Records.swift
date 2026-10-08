@@ -51,12 +51,14 @@ public enum Item: Equatable, Sendable {
         }
     }
 
-    /// Whether its state may yet change: a sync after missed news has to reach back to it. A
-    /// group message that is sent stays sent, so only a waiting one counts.
+    /// Whether it may yet change: a sync after missed news has to reach back to it. A message
+    /// that is waiting or sent may be delivered; a received one still unread may be read, on
+    /// another client. A group message that is sent stays sent, so only a waiting one counts.
     var mayChange: Bool {
+        if isUnread { return true }
         switch self {
-        case .groupMessage: state == MessageState.waiting
-        default: state == MessageState.waiting || state == MessageState.sent
+        case .groupMessage: return state == MessageState.waiting
+        default: return state == MessageState.waiting || state == MessageState.sent
         }
     }
 }
@@ -128,28 +130,33 @@ public struct Records: Equatable, Sendable {
     }
 
     /// The `after` to sync with. Normally the greatest `id` held. After missed news, one less than
-    /// the least `id` whose state may have changed unseen. Speaking a later version to the node
-    /// than at the last sync, 0, once.
-    public func after(version: UInt8, missed: Bool) -> UInt32 {
+    /// the least `id` whose state may have changed unseen, and never more than `missedSince`, the
+    /// greatest `id` held when news was first missed: what was lost may be below records received
+    /// after it. Speaking a later version to the node than at the last sync, 0, once.
+    public func after(version: UInt8, missedSince: UInt32? = nil) -> UInt32 {
         guard let synced = syncedVersion, synced >= version else { return 0 }
-        if missed, let least = items.values.filter(\.mayChange).map(\.id).min() {
-            return least - 1
-        }
-        return items.keys.max() ?? 0
+        guard let floor = missedSince else { return greatest }
+        let least = items.values.filter(\.mayChange).map(\.id).min()
+        return min(floor, least.map { $0 - 1 } ?? floor)
     }
+
+    /// The greatest `id` held, 0 for none.
+    public var greatest: UInt32 { items.keys.max() ?? 0 }
 
     mutating func beginSync() {
         syncing = ([], [], [])
     }
 
-    /// `SYNCED`: whatever of the three whole lists the sync did not send is gone.
-    mutating func finishSync(version: UInt8) {
-        guard let seen = syncing else { return }
+    /// `SYNCED`: whatever of the three whole lists the sync did not send is gone. Returns false,
+    /// and changes nothing, for a sync abandoned on the way.
+    mutating func finishSync(version: UInt8) -> Bool {
+        guard let seen = syncing else { return false }
         contacts = contacts.filter { seen.contacts.contains($0.key) }
         groups = groups.filter { seen.groups.contains($0.key) }
         neighbours = neighbours.filter { seen.neighbours.contains($0.key) }
         syncedVersion = version
         syncing = nil
+        return true
     }
 
     /// A sync that never finished proves nothing about what is gone.
