@@ -98,6 +98,7 @@ public final class Connection {
         version: UInt8 = Companion.version, records: Records = Records(), now: @escaping () -> Double,
         wallTime: (() -> UInt32)?
     ) {
+        precondition(version <= Companion.version, "this client speaks no version past \(Companion.version)")
         self.version = version
         self.records = records
         self.now = now
