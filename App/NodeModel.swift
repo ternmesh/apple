@@ -77,6 +77,9 @@ final class NodeModel: ObservableObject {
     private var saveTask: Task<Void, Never>?
     /// The `through` of a `READ` not yet answered, so the same one is not sent twice.
     private var reading: UInt32?
+    /// Conversations seen that the node has not yet been told of, each up to the greatest id it
+    /// held when seen. One seen behind another's unread item waits here until that one is read.
+    private var seen: [Peer: UInt32] = [:]
     private static let nameKey = "org.ternmesh.tern.nodeName"
 
     init() {
@@ -116,6 +119,7 @@ final class NodeModel: ObservableObject {
             conversations = records.conversations
             outgoing = Self.loadOutgoing(node.id)
             asked = Self.loadAsked(node.id)
+            seen = [:]
         }
         remembered = node.id
         nodeName = node.name
@@ -143,6 +147,7 @@ final class NodeModel: ObservableObject {
         conversations = []
         outgoing = []
         asked = []
+        seen = [:]
         firmware = nil
         nodeVersion = nil
         agreed = nil
@@ -309,11 +314,20 @@ final class NodeModel: ObservableObject {
         markRead()
     }
 
-    /// Marks read what the user can see: the conversation on screen, while the app is in front,
-    /// as far as `READ` can go without marking another conversation's.
+    /// Marks read what the user has seen: the conversation on screen while the app is in front,
+    /// and any seen before that waited behind another's unread item, as far as one `READ` can go
+    /// without marking what has not been seen.
     private func markRead() {
-        guard isActive, let peer = visible, isConnected, let c = link.connection,
-              let through = records.readThrough(showing: peer), through != reading
+        if isActive, let peer = visible,
+           let upTo = records.items.values.filter({ $0.peer == peer }).map(\.id).max() {
+            seen[peer] = max(seen[peer] ?? 0, upTo)
+        }
+        let records = self.records
+        // What has been read since, here or on another client, needs no more telling.
+        seen = seen.filter { peer, upTo in
+            records.items.values.contains { $0.isUnread && $0.peer == peer && $0.id <= upTo }
+        }
+        guard canWrite, let c = link.connection, let through = records.readThrough(seen: seen), through != reading
         else { return }
         reading = through
         c.submit(.read(through: through)) { [weak self] _ in self?.reading = nil }

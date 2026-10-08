@@ -123,6 +123,15 @@ final class ConversationsTests: XCTestCase {
         XCTAssertTrue(r.holdsSent("g6", to: .group(Self.hut), after: 0))
     }
 
+    /// A conversation seen behind another's unread item is read once that one is.
+    func testAConversationSeenWaitsForTheOneBeforeIt() {
+        let r = records([message(1, Self.carol), message(2, Self.bob), message(3, Self.bob)])
+        let bob = Peer.contact(Self.bob), carol = Peer.contact(Self.carol)
+        XCTAssertNil(r.readThrough(seen: [bob: 3]), "Carol's 1 is unread and unseen")
+        XCTAssertEqual(r.readThrough(seen: [bob: 3, carol: 1]), 3, "both seen: all three")
+        XCTAssertEqual(r.readThrough(seen: [bob: 2, carol: 1]), 2, "Bob's 3 came after he was seen")
+    }
+
     func testWords() {
         XCTAssertEqual(Words.waiting(reason: 0, wait: 0), "Waiting")
         XCTAssertEqual(Words.waiting(reason: 1, wait: 0), "Waiting: looking for a route")

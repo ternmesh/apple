@@ -140,6 +140,19 @@ extension Records {
         return through >= least ? through : nil
     }
 
+    /// The `through` to send a `READ` with, given the conversations the user has seen, each up to
+    /// the greatest id it held when seen: as far up the unread items as each is in a conversation
+    /// seen that far. A conversation seen while another's unread item came first is read once that
+    /// one is.
+    public func readThrough(seen: [Peer: UInt32]) -> UInt32? {
+        var through: UInt32?
+        for item in ordered where item.isUnread {
+            guard let upTo = seen[item.peer], item.id <= upTo else { break }
+            through = item.id
+        }
+        return through
+    }
+
     /// Whether `news`, about to be applied to these records, brings a received item not seen
     /// before and not yet read: one to tell the user of. One already held, as a sync after
     /// connecting sends again, is not.
