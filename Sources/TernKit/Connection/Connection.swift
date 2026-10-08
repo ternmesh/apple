@@ -182,16 +182,16 @@ public final class Connection {
         let t = now()
         if let f = inFlight {
             guard t >= f.deadline else { return }
-            // Everything is cleared before any callback runs, so one that opens again at once
-            // keeps what it opens.
+            // Everything is cleared, and the app told, before any request's callback runs: an app
+            // that opens again from either keeps what it opens.
             phase = .closed
             records.abandonSync()
             let queued = queue
             inFlight = nil
             queue = []
+            onEvent(.gone)
             f.pending.then(.failure(.noAnswer))
             for p in queued { p.then(.failure(.closed)) }
-            onEvent(.gone)
         } else if phase == .open, t >= lastAnswer + Companion.idle {
             if syncOwed {
                 syncOwed = false
@@ -273,6 +273,7 @@ public final class Connection {
         case (.sync, .synced):
             if records.finishSync(version: agreed ?? version) {
                 missedSince = nil
+                syncOwed = false
                 onEvent(.synced)
             }
             p.then(.success(body))

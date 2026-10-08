@@ -137,7 +137,12 @@ final class ConnectionTests: XCTestCase {
         let node = Node()
         node.connection.open()
         node.answerAll()
-        node.connection.submit(.ping) { _ in node.connection.open() }
+        var gone = false
+        node.connection.onEvent = { if $0 == .gone { gone = true } }
+        node.connection.submit(.ping) { _ in
+            XCTAssertTrue(gone, "the app is told before the request's callback")
+            node.connection.open()
+        }
         node.connection.submit(.ping)
         _ = node.sent.removeFirst()
         node.time += Companion.answerWait
@@ -285,6 +290,22 @@ final class ConnectionTests: XCTestCase {
         node.answerAll()
         XCTAssertEqual(node.events.last, .synced)
         node.time = 2 * Companion.idle
+        node.connection.tick()
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["PING"])
+    }
+
+    /// A sync that finishes some other way pays what a refused one owed: the idle deadline pings.
+    func testASyncThatFinishesClearsTheOneOwed() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerOne()  // INFO
+        node.answerOne()  // OK to SET_TIME
+        let sync = try Frame.decode(node.sent.removeFirst())
+        node.connection.receive(try Frame(seq: sync.seq, body: .error(code: ErrorCode.notNow)).encode())
+        node.connection.resync()
+        node.answerAll()
+        XCTAssertEqual(node.events.last, .synced)
+        node.time = Companion.idle
         node.connection.tick()
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["PING"])
     }
