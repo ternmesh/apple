@@ -154,6 +154,12 @@ final class NodeModel: ObservableObject {
 
     /// Sends `text` to the conversation `peer`, under a new `ref`.
     func send(_ text: String, to peer: Peer) {
+        // The same text to the same peer while one is unresolved is that one again, under its ref:
+        // two the node could not tell apart would leave a sync unable to say which of them went.
+        if let o = outgoing.first(where: { $0.peer == peer && $0.text == text }) {
+            if o.status != .sending { resend(o) }
+            return
+        }
         let ref = UInt32.random(in: 1...UInt32.max)
         outgoing.append(Outgoing(ref: ref, peer: peer, text: text, status: .sending, after: records.greatest))
         transmit(ref)

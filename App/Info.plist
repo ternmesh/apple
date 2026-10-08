@@ -4,6 +4,12 @@
 <dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Tern talks to your Tern node over Bluetooth, to send and receive your messages.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<!-- One scene on iPad too: the model knows one conversation on screen. -->
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
