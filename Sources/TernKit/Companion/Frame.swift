@@ -1,4 +1,4 @@
-// The companion protocol's frames, version 2: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 3: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
@@ -330,7 +330,7 @@ public struct Power: Equatable, Sendable {
     }
 }
 
-/// What a frame says: every frame of version 2.
+/// What a frame says: every frame of version 3.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
