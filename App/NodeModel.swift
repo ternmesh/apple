@@ -80,6 +80,9 @@ final class NodeModel: ObservableObject {
     /// Conversations seen that the node has not yet been told of, each up to the greatest id it
     /// held when seen. One seen behind another's unread item waits here until that one is read.
     private var seen: [Peer: UInt32] = [:]
+    /// The greatest id the node has answered a send with. Its record may not have come yet, so a
+    /// send made now matches only records past it: one the node queues for it is given a greater id.
+    private var queuedFloor: UInt32 = 0
     private static let nameKey = "org.ternmesh.tern.nodeName"
 
     init() {
@@ -120,6 +123,7 @@ final class NodeModel: ObservableObject {
             outgoing = Self.loadOutgoing(node.id)
             asked = Self.loadAsked(node.id)
             seen = [:]
+            queuedFloor = 0
         }
         remembered = node.id
         nodeName = node.name
@@ -148,6 +152,7 @@ final class NodeModel: ObservableObject {
         outgoing = []
         asked = []
         seen = [:]
+        queuedFloor = 0
         firmware = nil
         nodeVersion = nil
         agreed = nil
@@ -178,7 +183,8 @@ final class NodeModel: ObservableObject {
             return true
         }
         let ref = UInt32.random(in: 1...UInt32.max)
-        outgoing.append(Outgoing(ref: ref, peer: peer, text: text, status: .sending, after: records.greatest))
+        outgoing.append(Outgoing(
+            ref: ref, peer: peer, text: text, status: .sending, after: max(records.greatest, queuedFloor)))
         transmit(ref)
         return true
     }
@@ -210,7 +216,8 @@ final class NodeModel: ObservableObject {
     private func settle(_ ref: UInt32, _ result: Result<Body, RequestFailure>) {
         guard let i = outgoing.firstIndex(where: { $0.ref == ref }) else { return }
         switch result {
-        case .success:
+        case let .success(answer):
+            if case let .queued(id) = answer { queuedFloor = max(queuedFloor, id) }
             outgoing.remove(at: i)
         case .failure(.noAnswer), .failure(.closed):
             // It may have reached the node: only the same ref can try again safely.
