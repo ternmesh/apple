@@ -13,6 +13,11 @@ struct TernApp: App {
     @StateObject private var model = NodeModel()
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        // Before the model: a tap on a notification may be what launched the app.
+        Notifications.shared.start()
+    }
+
     var body: some Scene {
         #if os(macOS)
         // One window: the model knows one conversation on screen, which two windows would fight over.
@@ -66,6 +71,17 @@ struct RootView: View {
             // Over every screen, until it is done or skipped; it closes itself when the link drops.
             .sheet(isPresented: Binding(get: { model.needsSetup }, set: { _ in })) {
                 SetupView().environmentObject(model)
+            }
+            // A conversation opened from a notification is on the Chats screen.
+            .onChange(of: model.opened) { _ in section = .chats }
+            // A ternmesh.org link opened, as a QR code or a message holds one: whose it is, to add.
+            .onOpenURL { model.open($0) }
+            .sheet(isPresented: Binding(get: { model.linked != nil }, set: { if !$0 { model.linked = nil } })) {
+                // Each link is a sheet of its own: a second one opened while the first is up
+                // replaces its address, which the sheet's state would otherwise keep.
+                AddContactSheet(text: model.linked.map(Sharing.text) ?? "")
+                    .id(model.linked)
+                    .environmentObject(model)
             }
     }
 

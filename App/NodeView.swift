@@ -159,7 +159,13 @@ struct NodeView: View {
             }
             ForEach(list, id: \.routingId) { n in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(Words.routingId(n.routingId)).font(.body.monospaced())
+                    // A contact's name, when the routing id is one of theirs.
+                    if let name = model.routingNames[n.routingId] {
+                        Text(name)
+                        Text(Words.routingId(n.routingId)).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    } else {
+                        Text(Words.routingId(n.routingId)).font(.body.monospaced())
+                    }
                     Text("\(Words.role(n.role)), SNR \(Words.snr(n.snrQuarterDb)), heard \(Words.duration(UInt32(n.heard))) ago")
                         .font(.caption)
                         .foregroundStyle(.secondary)

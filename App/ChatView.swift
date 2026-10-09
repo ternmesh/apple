@@ -241,8 +241,12 @@ struct ItemBubble: View {
         HStack {
             if !item.isReceived { Spacer(minLength: 48) }
             VStack(alignment: item.isReceived ? .leading : .trailing, spacing: 3) {
-                if let sender {
-                    Text(sender).font(.caption.monospaced()).foregroundStyle(.secondary)
+                if let from {
+                    let named = model.routingNames[from] != nil
+                    Text(Words.sender(from, names: model.routingNames))
+                        .font(named ? .caption : .caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .help(Words.routingId(from))
                 }
                 content
                     .padding(.horizontal, 12)
@@ -257,10 +261,11 @@ struct ItemBubble: View {
         }
     }
 
-    /// Who wrote a received group message: the routing id it claimed, not a proof.
-    private var sender: String? {
+    /// Who wrote a received group message: the routing id it claimed, not a proof. It shows as the
+    /// contact whose id it is, if one is, and no more proved for that.
+    private var from: UInt32? {
         guard case let .groupMessage(m) = item, item.isReceived else { return nil }
-        return Words.sender(m.from)
+        return m.from
     }
 
     @ViewBuilder

@@ -21,7 +21,9 @@ jobs:
         include:
           # Nothing is signed for the store until the export, with a certificate Apple keeps: a
           # signed archive would have each runner make a development certificate of its own.
-          # iOS has no entitlements, so its archive is unsigned.
+          # iOS's archive is unsigned, so its one entitlement, Associated Domains, does not reach
+          # the export: ternmesh.org links do not open the app from a TestFlight build until it is
+          # signed too.
           - platform: iOS
             signing: CODE_SIGNING_ALLOWED=NO
           # The Mac's is signed ad hoc, which is what carries the sandbox's entitlements to the
