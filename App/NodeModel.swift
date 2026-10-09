@@ -65,6 +65,14 @@ enum FirmwareStatus: Equatable {
     /// How it ended, in words.
     case done(String)
     case failed(String)
+
+    /// Downloading the image or sending it.
+    var isTransferring: Bool {
+        switch self {
+        case .downloading, .sending: return true
+        default: return false
+        }
+    }
 }
 
 /// Someone not in the contacts tried to reach the node, and was refused.

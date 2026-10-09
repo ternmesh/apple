@@ -109,6 +109,8 @@ struct NodeView: View {
                 }
                 ForEach(Self.regions, id: \.self) { Text($0).tag($0) }
             }
+            // An image is for one region, and a new region restarts the node: not while one is on its way.
+            .disabled(model.firmwareStatus.isTransferring)
             Picker("Role", selection: Binding(get: { me.role }, set: { model.set(.role($0)) })) {
                 Text("Leaf").tag(UInt8(0))
                 Text("Relay").tag(UInt8(1))
