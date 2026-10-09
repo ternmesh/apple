@@ -89,7 +89,10 @@ struct Asked: Identifiable, Equatable {
 @MainActor
 final class NodeModel: ObservableObject {
     @Published private(set) var linkState: BluetoothLink.State = .starting {
-        didSet { feedPosition() }
+        didSet {
+            if linkState != .ready { syncedOnThisLink = false }
+            feedPosition()
+        }
     }
     @Published private(set) var found: [FoundNode] = []
     @Published private(set) var remembered: UUID?
@@ -162,6 +165,12 @@ final class NodeModel: ObservableObject {
     private var downloaded: (image: FirmwareImage, bytes: [UInt8])?
     private var firmwareTask: Task<Void, Never>?
     private let location = LocationFeed()
+    /// The node has synced over the link that is up: the sharing the records hold is the node's
+    /// now, not what it was before the link dropped. The link is ready a moment before its sync's
+    /// records are taken, and sharing that ended meanwhile must not be fed a position.
+    private var syncedOnThisLink = false {
+        didSet { feedPosition() }
+    }
     /// When the node was last given the phone's position, while the feed runs.
     private var positionSent: Date?
     /// The user turned sharing on and was asked for their location: what they answer may need saying.
@@ -479,7 +488,7 @@ final class NodeModel: ObservableObject {
     /// The node is given the phone's position while it shares with anyone, over a node synced and
     /// speaking positions, with the user's leave: and not otherwise.
     private var wantsPosition: Bool {
-        linkState == .ready && speaksPositions && location.isAllowed
+        linkState == .ready && syncedOnThisLink && speaksPositions && location.isAllowed
             && (!records.sharing.isEmpty || !records.groupSharing.isEmpty)
     }
 
@@ -772,6 +781,7 @@ final class NodeModel: ObservableObject {
         case .synced:
             take()
             save()
+            syncedOnThisLink = true
             nodeSynced()
         case .refused, .gone, .syncRefused:
             break
