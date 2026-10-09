@@ -402,6 +402,12 @@ final class NodeModel: ObservableObject {
     /// Downloads the image offered, checks it, and sends it to the node.
     func update() {
         guard case let .found(offer) = firmwareStatus, let id = remembered else { return }
+        // The region may have been changed since the check: an image is for one region.
+        guard offer.image.board.lowercased() == board?.lowercased(),
+              offer.image.region.lowercased() == records.me?.region.lowercased() else {
+            firmwareStatus = .nothing("The node has changed since the check. Check for an update again.")
+            return
+        }
         updateNode = id
         if let d = downloaded, d.image == offer.image { return send(d.bytes, offer) }
         firmwareStatus = .downloading(offer)
@@ -453,7 +459,6 @@ final class NodeModel: ObservableObject {
             guard let self, let u, self.updater === u else { return }
             self.updaterChanged(u, offer)
         }
-        keepAwake(true)
         updaterChanged(u, offer)
         // Over a link that is down, it waits, and goes on once the node answers HELLO again.
         if let c = link.connection, isConnected { u.resume(on: c) }
@@ -464,6 +469,8 @@ final class NodeModel: ObservableObject {
         case .idle, .waiting, .beginning, .sending, .ending:
             let canCancel = u.phase != .ending
             let waiting = u.phase == .waiting || u.phase == .idle
+            // Awake while sending; a link that is down may stay down, and the screen may sleep.
+            keepAwake(!waiting)
             firmwareStatus = .sending(offer, held: u.held, size: u.size, waiting: waiting, canCancel: canCancel)
         case let .finished(outcome):
             updater = nil
