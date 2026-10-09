@@ -102,9 +102,14 @@ final class NodeModel: ObservableObject {
     @Published private(set) var known: [KnownNode] = []
     @Published private(set) var nodeName: String?
     @Published private(set) var records = Records() {
-        didSet { feedPosition() }
+        didSet {
+            feedPosition()
+            if records.contacts != oldValue.contacts { routingNames = records.routingNames }
+        }
     }
     @Published private(set) var conversations: [Conversation] = []
+    /// The contacts' names by routing id, for neighbours and group members.
+    @Published private(set) var routingNames: [UInt32: String] = [:]
     @Published private(set) var outgoing: [Outgoing] = [] {
         didSet { keepOutgoing() }
     }
@@ -203,6 +208,7 @@ final class NodeModel: ObservableObject {
             asked = Self.loadAsked(id)
         }
         conversations = records.conversations
+        routingNames = records.routingNames
         link.makeConnection = { [weak self] id in
             // The records already loaded are the node's, unless the link is opening to another.
             let held = (self?.remembered == id ? self?.records : nil) ?? Self.load(id)

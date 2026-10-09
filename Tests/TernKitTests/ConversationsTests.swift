@@ -111,6 +111,41 @@ final class ConversationsTests: XCTestCase {
         XCTAssertFalse(r.isArrival(.power(Power(millivolts: 0, percent: 255, flags: 0))))
     }
 
+    // MARK: Names for routing ids
+
+    /// routing.md's, from vectors/routing.json in ternmesh/spec.
+    func testRoutingIds() {
+        let ids: [(String, UInt32)] = [
+            (String(repeating: "00", count: 32), 289_929_253),
+            (String(repeating: "11", count: 32), 3_167_332_448),
+            (String(repeating: "a5", count: 32), 1_399_809_041),
+            ("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", 1_752_530_551),
+        ]
+        for (hex, id) in ids {
+            XCTAssertEqual(Address(hex: hex)!.routingId, id, hex)
+        }
+        // The exchange in vectors/companion.json: a group message from the second address.
+        let second = Address(hex: "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c")!
+        XCTAssertEqual(second.routingId, 4_029_751_709)
+    }
+
+    func testAContactNamesItsRoutingId() {
+        let r = records([
+            .contact(Contact(address: Self.bob, session: 1, name: "Bob")),
+            .contact(Contact(address: Self.carol, session: 0, name: "")),
+        ])
+        let names = r.routingNames
+        XCTAssertEqual(names, [Self.bob.routingId: "Bob", Self.carol.routingId: "cacacaca…"])
+        XCTAssertEqual(Words.sender(Self.bob.routingId, names: names), "Bob")
+        XCTAssertEqual(Words.sender(0x0A0B_0C0D, names: names), "0a0b0c0d", "an id no contact has stays an id")
+        XCTAssertEqual(Words.sender(0, names: names), "You")
+    }
+
+    func testARoutingIdTwoContactsShareNamesNeither() {
+        let names = Records.byRoutingId([(7, "Bob"), (9, "Dan"), (7, "Carol"), (7, "Eve"), (0, "Zero")])
+        XCTAssertEqual(names, [9: "Dan"])
+    }
+
     // MARK: Words
 
     /// An unanswered send that reached the node is found in a sync, and not sent again.

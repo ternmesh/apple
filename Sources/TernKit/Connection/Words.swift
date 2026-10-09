@@ -107,9 +107,10 @@ public enum Words {
         }
     }
 
-    /// A routing id, as the eight hex digits a group message's sender is known by; 0 is this node.
-    public static func sender(_ id: UInt32) -> String {
-        id == 0 ? "You" : routingId(id)
+    /// A group message's sender: this node for 0, else the contact `names` has for its routing id
+    /// (`Records.routingNames`), else the id's eight hex digits.
+    public static func sender(_ id: UInt32, names: [UInt32: String] = [:]) -> String {
+        id == 0 ? "You" : names[id] ?? routingId(id)
     }
 
     /// A routing id in hex, all eight digits.
