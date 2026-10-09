@@ -8,6 +8,7 @@ struct ChatsView: View {
     @EnvironmentObject private var model: NodeModel
     @State private var newChat = false
     @State private var newGroup = false
+    @State private var joining = false
     @State private var groupName = ""
     @State private var query = ""
 
@@ -63,11 +64,17 @@ struct ChatsView: View {
                             groupName = ""
                             newGroup = true
                         }
+                        if model.speaksJoinCodes {
+                            Button("Join a Group…") { joining = true }
+                        }
                     } label: {
                         Label("New", systemImage: "square.and.pencil")
                     }
                     .disabled(!model.isConnected)
                 }
+            }
+            .sheet(isPresented: $joining) {
+                JoinGroupSheet { group in model.chatPath = [.group(group)] }.environmentObject(model)
             }
             .sheet(isPresented: $newChat) {
                 NewChatSheet { peer in

@@ -1,5 +1,5 @@
-// An address's link as a QR code (draft/sharing.md), and on iPhone and iPad, the camera that reads
-// one back. A Mac has no camera pointed at a node, so it takes a link or an address pasted in.
+// An address's link as a QR code (draft/sharing.md), a group's join code as one (draft/groups.md),
+// and on iPhone and iPad, the camera that reads one back. A Mac has no camera pointed at a node, so it takes a link or an address pasted in.
 
 import CoreImage
 import SwiftUI
@@ -38,6 +38,34 @@ struct QRCodeView: View {
     }
 }
 
+/// A join code's link as a QR code, from TernKit's encoder: alphanumeric either side of the `#`,
+/// which keeps any code to version 4, where Core Image's generator writes it all as bytes. Black on
+/// white whatever the appearance, with the four modules of light margin ISO/IEC 18004 asks for.
+struct LinkCodeView: View {
+    let link: String
+
+    var body: some View {
+        if let modules = try? QR.encode(QR.segments(link)) {
+            Canvas { context, size in
+                let quiet = 4
+                let cells = modules.count + 2 * quiet
+                let module = min(size.width, size.height) / CGFloat(cells)
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.white))
+                for (y, row) in modules.enumerated() {
+                    for (x, dark) in row.enumerated() where dark {
+                        // A hair over a module, so neighbours meet with no seam between them.
+                        let r = CGRect(x: CGFloat(x + quiet) * module, y: CGFloat(y + quiet) * module, width: module + 0.5, height: module + 0.5)
+                        context.fill(Path(r), with: .color(.black))
+                    }
+                }
+            }
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: 280)
+            .accessibilityLabel("QR code of the group's join code")
+        }
+    }
+}
+
 /// A contact's code on a sheet of its own, for passing the same node on to someone else.
 struct CodeSheet: View {
     let title: String
@@ -68,12 +96,17 @@ struct CodeSheet: View {
 }
 
 #if os(iOS)
-/// The camera, reading QR codes until one holds a Tern address; then [found] is given it.
+/// The camera, reading QR codes until one holds what `accepts` takes, a Tern address unless told
+/// otherwise; then `found` is given the text, trimmed. `refusal` is said of any other code.
 struct ScannerView: UIViewControllerRepresentable {
-    let found: (Address) -> Void
+    var accepts: (String) -> Bool = { Sharing.read($0) != nil }
+    var refusal = "That code does not hold a Tern address."
+    let found: (String) -> Void
 
     func makeUIViewController(context: Context) -> ScannerController {
         let controller = ScannerController()
+        controller.accepts = accepts
+        controller.refusal = refusal
         controller.found = found
         return controller
     }
@@ -82,7 +115,9 @@ struct ScannerView: UIViewControllerRepresentable {
 }
 
 final class ScannerController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
-    var found: ((Address) -> Void)?
+    var accepts: (String) -> Bool = { _ in false }
+    var refusal = ""
+    var found: ((String) -> Void)?
     private let session = AVCaptureSession()
     private var preview: AVCaptureVideoPreviewLayer?
     private let message = UILabel()
@@ -155,12 +190,13 @@ final class ScannerController: UIViewController, AVCaptureMetadataOutputObjectsD
         guard !done else { return }
         for case let code as AVMetadataMachineReadableCodeObject in objects {
             guard let text = code.stringValue else { continue }
-            if let address = Sharing.read(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if accepts(trimmed) {
                 done = true
-                found?(address)
+                found?(trimmed)
                 return
             }
-            say("That code does not hold a Tern address.")
+            say(refusal)
         }
     }
 

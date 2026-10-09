@@ -148,6 +148,8 @@ final class NodeModel: ObservableObject {
     @Published private(set) var opened = 0
     /// The address in a ternmesh.org link the app was opened with, to be added as a contact.
     @Published var linked: Address?
+    /// A join code's link the app was opened with, held only until its sheet closes.
+    @Published var joining: String?
 
     /// Whether the app is in front: notifications are only for when it is not, or for a
     /// conversation not on screen.
@@ -468,6 +470,21 @@ final class NodeModel: ObservableObject {
     func leaveGroup(_ group: GroupID) { request(.leaveGroup(group: group)) }
     func invite(_ address: Address, to group: GroupID) { request(.sendInvite(group: group, to: address)) }
     func join(_ invite: UInt32) { request(.join(id: invite)) }
+
+    /// Asks the node for a group's join code, for `then` to show. Only ever because the user asked
+    /// to see it; the link is not kept here.
+    func groupLink(_ group: GroupID, then: @escaping (String) -> Void) {
+        request(.groupLink(group: group)) { answer in
+            if case let .link(link) = answer { then(link) }
+        }
+    }
+
+    /// Joins the group a join code is for, which the node reads. Only ever because the user asked.
+    func joinLink(_ link: String, then: @escaping (GroupID) -> Void = { _ in }) {
+        request(.joinLink(link: link)) { answer in
+            if case let .made(group) = answer { then(group) }
+        }
+    }
     func set(_ setting: Setting) { request(.set(setting)) }
 
     /// Sets the name the node's cards carry, the one name it puts on the air in clear. Only ever
@@ -488,6 +505,9 @@ final class NodeModel: ObservableObject {
     }
 
     // MARK: Cards
+
+    /// Whether the node speaks join codes: version 7 or later. Before it, none is offered.
+    var speaksJoinCodes: Bool { (agreed ?? 0) >= 7 }
 
     /// Whether the node speaks cards: version 6 or later. Before it, nothing of them is offered.
     var speaksCards: Bool { (agreed ?? 0) >= 6 }
@@ -974,8 +994,13 @@ final class NodeModel: ObservableObject {
     }
 
     /// Takes a link the app was opened with: an address, per draft/sharing.md, which the user is
-    /// asked to add as a contact.
+    /// asked to add as a contact, or a group's join code, per draft/groups.md, which they are asked
+    /// to join.
     func open(_ url: URL) {
+        if JoinCode.read(url.absoluteString) != nil {
+            joining = url.absoluteString
+            return
+        }
         guard let address = Sharing.read(url.absoluteString) else {
             problem = "That link is not a Tern address."
             return

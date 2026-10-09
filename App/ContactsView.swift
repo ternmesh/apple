@@ -259,7 +259,7 @@ struct AddContactSheet: View {
             .fullScreenCover(isPresented: $scanning) {
                 NavigationStack {
                     ScannerView { found in
-                        text = Sharing.text(found)
+                        text = Sharing.read(found).map(Sharing.text) ?? found
                         scanning = false
                     }
                     .ignoresSafeArea()

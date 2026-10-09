@@ -15,6 +15,7 @@ struct ChatView: View {
     @State private var leaving = false
     @State private var ending = false
     @State private var sharingLocation = false
+    @State private var showingCode = false
 
     private static let end = "end"
 
@@ -56,6 +57,11 @@ struct ChatView: View {
             Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $inviting) { inviteSheet }
+        .sheet(isPresented: $showingCode) {
+            if case let .group(g) = peer {
+                JoinCodeSheet(group: g, name: model.records.groups[g]?.name ?? "").environmentObject(model)
+            }
+        }
         .sheet(isPresented: $sharingLocation) {
             ShareLocationView(peer: peer, current: model.sharing(with: peer))
                 .environmentObject(model)
@@ -65,7 +71,7 @@ struct ChatView: View {
                 if case let .group(g) = peer { model.leaveGroup(g) }
             }
         } message: {
-            Text("The node forgets the group's secret. Its messages are kept, and the others are not told.")
+            Text("The node forgets the group's secret. Its messages are kept, and the others are not told. To be in it again, you need an invite or its join code.")
         }
         .confirmationDialog("End the session?", isPresented: $ending, titleVisibility: .visible) {
             Button("End Session", role: .destructive) {
@@ -188,6 +194,9 @@ struct ChatView: View {
             }
             Button("Invite a Contact") { inviting = true }
                 .disabled(model.records.contacts.isEmpty)
+            if model.speaksJoinCodes {
+                Button("Join Code…") { showingCode = true }
+            }
             // Only while the node holds the group: a left group's conversation stays.
             if model.speaksPositions, model.records.groups[group] != nil {
                 Button("Share My Location…") { sharingLocation = true }

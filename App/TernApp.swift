@@ -74,7 +74,8 @@ struct RootView: View {
             }
             // A conversation opened from a notification is on the Chats screen.
             .onChange(of: model.opened) { _ in section = .chats }
-            // A ternmesh.org link opened, as a QR code or a message holds one: whose it is, to add.
+            // A ternmesh.org link opened, as a QR code or a message holds one: whose it is, to add,
+            // or the group it joins.
             .onOpenURL { model.open($0) }
             .sheet(isPresented: Binding(get: { model.linked != nil }, set: { if !$0 { model.linked = nil } })) {
                 // Each link is a sheet of its own: a second one opened while the first is up
@@ -82,6 +83,14 @@ struct RootView: View {
                 AddContactSheet(text: model.linked.map(Sharing.text) ?? "")
                     .id(model.linked)
                     .environmentObject(model)
+            }
+            .sheet(isPresented: Binding(get: { model.joining != nil }, set: { if !$0 { model.joining = nil } })) {
+                JoinGroupSheet(text: model.joining ?? "") { group in
+                    section = .chats
+                    model.chatPath = [.group(group)]
+                }
+                .id(model.joining)
+                .environmentObject(model)
             }
     }
 

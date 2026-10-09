@@ -54,7 +54,7 @@ public enum Sharing {
         return [0, 4, 8].map { String(padded[$0 ..< $0 + 4]) }.joined(separator: " ")
     }
 
-    private static func upper(_ c: UInt8) -> UInt8 {
+    static func upper(_ c: UInt8) -> UInt8 {
         (UInt8(ascii: "a") ... UInt8(ascii: "z")).contains(c) ? c - 32 : c
     }
 
@@ -74,10 +74,16 @@ public enum Sharing {
         return String(decoding: out, as: UTF8.self)
     }
 
-    /// The 32 bytes of canonical base32, either case, or nil: wrong length, a character outside the
-    /// alphabet, or a spare bit set, which would give one address two links.
+    /// The 32 bytes of an address's canonical base32, either case, or nil.
     private static func unbase32(_ text: [UInt8]) -> [UInt8]? {
-        guard text.count == base32Length else { return nil }
+        text.count == base32Length ? unbase32Any(text) : nil
+    }
+
+    /// Canonical base32 of any length, either case, as bytes, or nil: a character outside the
+    /// alphabet, a last character that carries no bit of any byte, or a spare bit set, which would
+    /// give the same bytes two spellings.
+    static func unbase32Any(_ text: [UInt8]) -> [UInt8]? {
+        guard text.count * 5 % 8 < 5 else { return nil }
         var out: [UInt8] = []
         var n = 0
         var bits = 0
@@ -90,8 +96,7 @@ public enum Sharing {
                 out.append(UInt8((n >> bits) & 0xFF))
             }
         }
-        // 52 characters are 260 bits: the 256 of the address and four that must be zero.
-        guard bits == 4, n & 0xF == 0 else { return nil }
+        guard n & ((1 << bits) - 1) == 0 else { return nil }
         return out
     }
 }

@@ -8,7 +8,7 @@
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Tern talks to your Tern node over Bluetooth, to send and receive your messages.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Tern reads the QR code on another Tern node or app, to add it as a contact.</string>
+	<string>Tern reads the QR code on another Tern node or app, to add it as a contact or to join a group.</string>
 	<!-- Asked only when the user turns on sharing their location with someone. A Mac reads the
 	     second key. -->
 	<key>NSLocationWhenInUseUsageDescription</key>
