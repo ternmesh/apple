@@ -470,6 +470,13 @@ final class NodeModel: ObservableObject {
     func join(_ invite: UInt32) { request(.join(id: invite)) }
     func set(_ setting: Setting) { request(.set(setting)) }
 
+    /// Sets the name the node's cards carry, the one name it puts on the air in clear. Only ever
+    /// because the user typed it: the specification says a client never changes it by itself.
+    func setCardName(_ name: String) {
+        guard fits(name, Companion.cardNameMax) else { return }
+        request(.set(.cardName(name)))
+    }
+
     func dismissAsked(_ a: Asked) { asked.removeAll { $0.address == a.address } }
 
     private func fits(_ text: String, _ limit: Int) -> Bool {
@@ -479,6 +486,11 @@ final class NodeModel: ObservableObject {
         }
         return true
     }
+
+    // MARK: Cards
+
+    /// Whether the node speaks cards: version 6 or later. Before it, nothing of them is offered.
+    var speaksCards: Bool { (agreed ?? 0) >= 6 }
 
     // MARK: Positions
 
