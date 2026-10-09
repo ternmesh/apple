@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyLists-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- The app has no encryption of its own: the Bluetooth link's and the download's are the system's. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Tern talks to your Tern node over Bluetooth, to send and receive your messages.</string>
 	<key>NSCameraUsageDescription</key>
