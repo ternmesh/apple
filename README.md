@@ -80,8 +80,8 @@ with the address in it, through the Associated Domains entitlement in `App/Tern-
 and the `apple-app-site-association` file ternmesh.org serves for `/a/*` and `/A/*`. The App ID
 `org.ternmesh.tern` must have Associated Domains to sign it for a device; a personal team cannot,
 so to run the app under one, take `CODE_SIGN_ENTITLEMENTS[sdk=iphone*]` out of `project.yml`. The
-release's iOS archive is unsigned, which leaves the entitlement out of its TestFlight builds for
-now, and the Mac app does not have it yet.
+release's iOS archive is unsigned, so the release workflow gives it the entitlement before the
+export signs it for TestFlight. The Mac app does not have it yet.
 
 Tapping a notification of a message opens its conversation, and its Reply action sends from it.
 While the app is in front, only messages to a conversation not on screen are notified.
@@ -93,8 +93,7 @@ CI builds the app for the iOS simulator and for the Mac, unsigned, as well as te
 * [Cards](https://github.com/ternmesh/spec/blob/main/draft/cards.md) in the app: TernKit speaks
   version 6 and holds the cards a node reports, but no screen turns a node's cards on, names them
   or shows who is about.
-* Links that open the app from a TestFlight build, and on the Mac: the release's iOS archive signed,
-  and the Mac's entitlements given Associated Domains.
+* Links that open the app on the Mac: its entitlements given Associated Domains.
 * USB serial on the Mac, over `ByteStream`.
 * Tests of the app's screens, and of the Bluetooth link against a node.
 

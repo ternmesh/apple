@@ -47,8 +47,8 @@ targets:
         # for any of them.
         "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": App/Tern.entitlements
         # iOS's one is Associated Domains, so that a ternmesh.org/a/ link opens the app: the App ID
-        # must have the capability, which a personal team cannot. The release's archive is unsigned,
-        # which leaves it out of what is sent to TestFlight (see .github/workflows/release.yml).
+        # must have the capability, which a personal team cannot. The release gives it to its
+        # archive after building it (see .github/workflows/release.yml).
         "CODE_SIGN_ENTITLEMENTS[sdk=iphone*]": App/Tern-iOS.entitlements
         ENABLE_HARDENED_RUNTIME: YES
     scheme: {}
