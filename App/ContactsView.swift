@@ -118,6 +118,11 @@ struct AskedSection: View {
                 ForEach(model.asked) { a in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(a.address.short).font(.body.monospaced())
+                        // The address in an ASKED is proved, and a card from it is signed by it: what
+                        // the card says is still only what its sender says.
+                        if let card = model.records.cards[a.address], let claim = Words.claim(card.name) {
+                            Text(claim).font(.callout)
+                        }
                         Text("\(Words.asked(a.why)), \(a.when.formatted(date: .omitted, time: .shortened))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -157,6 +162,10 @@ struct SaveAskedAlert: ViewModifier {
                 name = ""
             }
             Button("Cancel", role: .cancel) { name = "" }
+        }
+        .onChange(of: saving) { a in
+            // A card from the address offers the name it carries, to keep or change.
+            if let a, let card = model.records.cards[a.address] { name = card.name }
         }
     }
 }
