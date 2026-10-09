@@ -1,5 +1,5 @@
-// Every conversation, latest first, and starting a new one: with a contact, with an address
-// pasted in, or in a new group.
+// Every conversation, latest first, with a search over their names and what was said in them; and
+// starting a new one: with a contact, with an address pasted in, or in a new group.
 
 import SwiftUI
 import TernKit
@@ -10,6 +10,16 @@ struct ChatsView: View {
     @State private var newChat = false
     @State private var newGroup = false
     @State private var groupName = ""
+    @State private var query = ""
+
+    /// The conversations with the search in their name or in anything said in them.
+    private var shown: [Conversation] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return model.conversations }
+        return model.conversations.filter { c in
+            c.name.localizedCaseInsensitiveContains(q) || c.items.contains { $0.summary.localizedCaseInsensitiveContains(q) }
+        }
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -31,13 +41,17 @@ struct ChatsView: View {
                             systemImage: "person.crop.circle.badge.questionmark")
                     }
                 }
-                ForEach(model.conversations) { c in
+                if !query.isEmpty && shown.isEmpty {
+                    Text("Nothing matches.").foregroundStyle(.secondary)
+                }
+                ForEach(shown) { c in
                     NavigationLink(value: c.peer) {
                         ConversationRow(conversation: c)
                     }
                 }
             }
             .navigationTitle("Chats")
+            .searchable(text: $query)
             .navigationDestination(for: Peer.self) { peer in
                 ChatView(peer: peer)
             }
@@ -163,6 +177,8 @@ struct NewChatSheet: View {
 
 /// An address typed or pasted: hex, with any spaces, colons or line breaks taken out.
 func parseAddress(_ text: String) -> Address? {
+    // A link or the text form, as draft/sharing.md writes them; pasted text brings a line break.
+    if let address = Sharing.read(text.trimmingCharacters(in: .whitespacesAndNewlines)) { return address }
     let digits = text.filter { $0.isHexDigit }
     guard digits.count == Address.length * 2,
           text.allSatisfy({ $0.isHexDigit || $0.isWhitespace || $0 == ":" })

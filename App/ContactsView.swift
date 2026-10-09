@@ -1,5 +1,7 @@
 // The contacts the node holds, and the addresses it refused because they were not among them.
-// Saving an address as a contact is what lets it in: the node takes it the next time it asks.
+// Saving an address as a contact is what lets it in: the node takes it the next time it asks. A
+// contact is added from the QR code on its owner's node screen, their link, or the address, and
+// shows the short code its owner can check against their own.
 
 import SwiftUI
 import TernKit
@@ -10,6 +12,7 @@ struct ContactsView: View {
     @State private var renaming: Contact?
     @State private var name = ""
     @State private var saving: Asked?
+    @State private var showing: Contact?
 
     var body: some View {
         NavigationStack {
@@ -25,7 +28,9 @@ struct ContactsView: View {
                         }
                         .contextMenu {
                             Button("Rename") { rename(c) }
-                            Button("Copy Address") { copyToClipboard(c.address.description) }
+                            Button("Show Code") { showing = c }
+                            ShareLink(item: Sharing.link(c.address))
+                            Button("Copy Address") { copyToClipboard(Sharing.text(c.address)) }
                             Button("Remove", role: .destructive) { model.removeContact(c.address) }
                         }
                         .swipeActions {
@@ -50,6 +55,9 @@ struct ContactsView: View {
                 }
             }
             .sheet(isPresented: $adding) { AddContactSheet() }
+            .sheet(item: $showing) { c in
+                CodeSheet(title: c.name.isEmpty ? c.address.short : c.name, address: c.address)
+            }
             .savesAsked($saving)
             .alert(
                 "Rename contact",
@@ -78,7 +86,7 @@ struct ContactRow: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(contact.name.isEmpty ? contact.address.short : contact.name)
             HStack {
-                Text(contact.address.short).font(.caption.monospaced())
+                Text(Sharing.shortCode(contact.address)).font(.caption.monospaced())
                 Text(contact.session == 1 ? "Session: yes" : "Session: no").font(.caption)
             }
             .foregroundStyle(.secondary)
@@ -157,22 +165,40 @@ struct AskedView: View {
     }
 }
 
-/// A new contact: an address, typed or pasted in hex, and a name.
+/// A new contact: a link or an address, scanned, pasted or typed, and a name.
 struct AddContactSheet: View {
     @EnvironmentObject private var model: NodeModel
     @Environment(\.dismiss) private var dismiss
-    @State private var hex = ""
+    @State private var text = ""
     @State private var name = ""
+    @State private var scanning = false
+
+    private var address: Address? { parseAddress(text) }
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Address, 64 hex digits", text: $hex, axis: .vertical)
-                    .font(.body.monospaced())
-                    .autocorrectionDisabled()
                 #if os(iOS)
-                    .textInputAutocapitalization(.never)
+                Button {
+                    scanning = true
+                } label: {
+                    Label("Scan Code", systemImage: "qrcode.viewfinder")
+                }
                 #endif
+                SwiftUI.Section {
+                    TextField("Link or address", text: $text, axis: .vertical)
+                        .font(.body.monospaced())
+                        .autocorrectionDisabled()
+                    #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                    #endif
+                } footer: {
+                    if let address {
+                        Text("Check with the owner that their node shows this short code: \(Sharing.shortCode(address))")
+                    } else if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("That is not a Tern link or address.").foregroundStyle(.red)
+                    }
+                }
                 TextField("Name", text: $name)
                 if name.utf8.count > Companion.nameMax {
                     Text("A name is at most \(Companion.nameMax) bytes.").foregroundStyle(.red)
@@ -185,14 +211,30 @@ struct AddContactSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        if let address = parseAddress(hex) {
+                        if let address {
                             model.saveContact(address, name: name)
                             dismiss()
                         }
                     }
-                    .disabled(parseAddress(hex) == nil || name.utf8.count > Companion.nameMax)
+                    .disabled(address == nil || name.utf8.count > Companion.nameMax)
                 }
             }
+            #if os(iOS)
+            .fullScreenCover(isPresented: $scanning) {
+                NavigationStack {
+                    ScannerView { found in
+                        text = Sharing.text(found)
+                        scanning = false
+                    }
+                    .ignoresSafeArea()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { scanning = false }
+                        }
+                    }
+                }
+            }
+            #endif
         }
         .frame(minWidth: 360, minHeight: 240)
     }

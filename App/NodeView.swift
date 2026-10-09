@@ -1,5 +1,6 @@
-// The node itself: its address, its battery and airtime, the neighbours it hears, its settings,
-// and its firmware. A setting changed here is shown once the node's SELF says so, not before.
+// The node itself: its address, as a QR code, a link and the short code; its battery and airtime,
+// the neighbours it hears, its settings, and its firmware. A setting changed here is shown once the
+// node's SELF says so, not before.
 
 import SwiftUI
 import TernKit
@@ -51,12 +52,17 @@ struct NodeView: View {
 
     private func identity(_ me: NodeSelf) -> some View {
         SwiftUI.Section {
-            Text(me.address.description)
+            QRCodeView(address: me.address)
+                .frame(maxWidth: .infinity)
+            LabeledContent("Short code") {
+                Text(Sharing.shortCode(me.address)).font(.body.monospaced()).textSelection(.enabled)
+            }
+            Text(Sharing.grouped(me.address))
                 .font(.body.monospaced())
                 .textSelection(.enabled)
             HStack {
-                Button("Copy") { copyToClipboard(me.address.description) }
-                ShareLink(item: me.address.description)
+                Button("Copy") { copyToClipboard(Sharing.text(me.address)) }
+                ShareLink(item: Sharing.link(me.address))
             }
             .buttonStyle(.borderless)
             LabeledContent("Role", value: Words.role(me.role))
@@ -66,7 +72,9 @@ struct NodeView: View {
         } header: {
             Text("Address")
         } footer: {
-            Text("Give this to someone so they can write to you.")
+            Text("Someone with Tern scans the code to add you as a contact; a phone without it opens a page on "
+                + "ternmesh.org that shows the address. Read out the short code to them: the one their phone "
+                + "shows should be the same.")
         }
     }
 

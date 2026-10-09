@@ -8,6 +8,8 @@ import TernKit
 import UserNotifications
 #if os(iOS)
 import UIKit
+#else
+import AppKit
 #endif
 
 /// A message the user sent that the node has not yet said it holds. Once it answers `QUEUED`, the
@@ -114,6 +116,8 @@ final class NodeModel: ObservableObject {
     @Published private(set) var agreed: UInt8?
     /// A refusal or failure to show the user, once.
     @Published var problem: String?
+    /// The first-run setup was finished, or skipped, for this node.
+    @Published private(set) var setUp = true
 
     /// The conversation on screen, which is read as it arrives.
     var visible: Peer? {
@@ -147,6 +151,7 @@ final class NodeModel: ObservableObject {
     private var firmwareTask: Task<Void, Never>?
     private static let nameKey = "org.ternmesh.tern.nodeName"
     private static let knownKey = "org.ternmesh.tern.known"
+    private static func setupKey(_ id: UUID) -> String { "org.ternmesh.tern.setup.\(id.uuidString)" }
 
     init() {
         link = BluetoothLink()
@@ -194,6 +199,7 @@ final class NodeModel: ObservableObject {
             remembered = id
             records = Self.load(id)
             conversations = records.conversations
+            showUnread()
             outgoing = Self.loadOutgoing(id)
             asked = Self.loadAsked(id)
             seen = [:]
@@ -242,6 +248,7 @@ final class NodeModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.nameKey)
         records = Records()
         conversations = []
+        showUnread()
         outgoing = []
         asked = []
         seen = [:]
@@ -256,6 +263,45 @@ final class NodeModel: ObservableObject {
 
     /// Connected, and the first sync done: what the app holds is the node's.
     var isReady: Bool { linkState == .ready }
+
+    /// Unread messages across every conversation.
+    var unread: Int { conversations.reduce(0) { $0 + $1.unread } }
+
+    /// Whether to walk the user through the node's setup: the first time the app meets it once it
+    /// has synced, and whenever its region is not set, without which it transmits nothing.
+    var needsSetup: Bool {
+        guard linkState == .ready, let me = records.me else { return false }
+        return !setUp || me.region.isEmpty
+    }
+
+    /// The setup is over for the app's node: it is not offered for it again.
+    func finishSetup() {
+        guard let id = remembered else { return }
+        UserDefaults.standard.set(true, forKey: Self.setupKey(id))
+        setUp = true
+    }
+
+    /// Whether the setup is over for the node `id`. A node met before the setup existed, already
+    /// given a region and a contact, counts as set up rather than being walked through it again.
+    private func isSetUp(_ id: UUID, _ records: Records) -> Bool {
+        if UserDefaults.standard.bool(forKey: Self.setupKey(id)) { return true }
+        let done = !(records.me?.region.isEmpty ?? true) && !records.contacts.isEmpty
+        if done { UserDefaults.standard.set(true, forKey: Self.setupKey(id)) }
+        return done
+    }
+
+    /// The unread count on the app's icon.
+    private func showUnread() {
+        #if os(iOS)
+        if #available(iOS 17, *) {
+            UNUserNotificationCenter.current().setBadgeCount(unread)
+        } else {
+            UIApplication.shared.applicationIconBadgeNumber = unread
+        }
+        #else
+        NSApplication.shared.dockTile.badgeLabel = unread > 0 ? String(unread) : nil
+        #endif
+    }
 
     /// Whether a message may be written now. Not while the first sync is under way: what the app
     /// holds is not yet the node's, and the `after` a send is matched from must be.
@@ -598,6 +644,8 @@ final class NodeModel: ObservableObject {
         guard let c = link.connection else { return }
         records = c.records
         conversations = records.conversations
+        setUp = remembered.map { isSetUp($0, self.records) } ?? true
+        showUnread()
         // An unanswered send that the records now show the node holding went: it needs no retry.
         let records = self.records
         if outgoing.contains(where: { $0.status == .unanswered && records.holdsSent($0.text, to: $0.peer, after: $0.after) }) {
@@ -657,6 +705,7 @@ final class NodeModel: ObservableObject {
         try? FileManager.default.removeItem(at: file(id))
         UserDefaults.standard.removeObject(forKey: outgoingKey(id))
         UserDefaults.standard.removeObject(forKey: askedKey(id))
+        UserDefaults.standard.removeObject(forKey: setupKey(id))
     }
 
     private func keepKnown() {
