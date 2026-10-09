@@ -187,12 +187,17 @@ public struct SemanticVersion: Comparable, Sendable, CustomStringConvertible {
         case (false, false): break
         }
         for (x, y) in zip(a.prerelease, b.prerelease) where x != y {
-            switch (UInt64(x), UInt64(y)) {
-            case let (m?, n?): return m < n
+            // Numbers have no leading zeros, so the shorter is the smaller, whatever their length.
+            func numeric(_ s: String) -> Bool { s.utf8.allSatisfy { (0x30...0x39).contains($0) } }
+            switch (numeric(x), numeric(y)) {
+            case (true, true):
+                return x.utf8.count != y.utf8.count
+                    ? x.utf8.count < y.utf8.count
+                    : Array(x.utf8).lexicographicallyPrecedes(Array(y.utf8))
             // Numbers come before words; words go in ASCII order.
-            case (_?, nil): return true
-            case (nil, _?): return false
-            case (nil, nil): return Array(x.utf8).lexicographicallyPrecedes(Array(y.utf8))
+            case (true, false): return true
+            case (false, true): return false
+            case (false, false): return Array(x.utf8).lexicographicallyPrecedes(Array(y.utf8))
             }
         }
         return a.prerelease.count < b.prerelease.count

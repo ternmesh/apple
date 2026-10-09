@@ -119,7 +119,8 @@ final class ReleaseTests: XCTestCase {
     func testSemverPrecedence() {
         let ordered = [
             "0.9.9", "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2",
-            "1.0.0-beta.11", "1.0.0-rc.1", "1.0.0", "1.0.1", "1.2.0", "1.10.0", "2.0.0",
+            "1.0.0-beta.11", "1.0.0-beta.99999999999999999999", "1.0.0-beta.100000000000000000000",
+            "1.0.0-rc.1", "1.0.0", "1.0.1", "1.2.0", "1.10.0", "2.0.0",
         ].map { SemanticVersion($0)! }
         for i in ordered.indices {
             for j in ordered.indices {
