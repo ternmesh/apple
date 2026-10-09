@@ -25,6 +25,7 @@ targets:
         excludes:
           - Info.plist
           - Tern.entitlements
+          - Tern-iOS.entitlements
     dependencies:
       - package: TernKit
     settings:
@@ -45,5 +46,9 @@ targets:
         # ternmesh.org) and location (for the node to share) let through. iOS needs no entitlement
         # for any of them.
         "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": App/Tern.entitlements
+        # iOS's one is Associated Domains, so that a ternmesh.org/a/ link opens the app: the App ID
+        # must have the capability, which a personal team cannot. The release's archive is unsigned,
+        # which leaves it out of what is sent to TestFlight (see .github/workflows/release.yml).
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphone*]": App/Tern-iOS.entitlements
         ENABLE_HARDENED_RUNTIME: YES
     scheme: {}

@@ -146,6 +146,8 @@ final class NodeModel: ObservableObject {
     @Published var chatPath: [Peer] = []
     /// Counts the conversations opened from a notification, each of which brings Chats forward.
     @Published private(set) var opened = 0
+    /// The address in a ternmesh.org link the app was opened with, to be added as a contact.
+    @Published var linked: Address?
 
     /// Whether the app is in front: notifications are only for when it is not, or for a
     /// conversation not on screen.
@@ -942,6 +944,16 @@ final class NodeModel: ObservableObject {
         guard node == remembered else { return }
         chatPath = [peer]
         opened += 1
+    }
+
+    /// Takes a link the app was opened with: an address, per draft/sharing.md, which the user is
+    /// asked to add as a contact.
+    func open(_ url: URL) {
+        guard let address = Sharing.read(url.absoluteString) else {
+            problem = "That link is not a Tern address."
+            return
+        }
+        linked = address
     }
 
     /// Sends a reply typed into a notification, as the composer would. One that cannot go is not

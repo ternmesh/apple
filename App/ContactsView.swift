@@ -165,13 +165,18 @@ struct AskedView: View {
     }
 }
 
-/// A new contact: a link or an address, scanned, pasted or typed, and a name.
+/// A new contact: a link or an address, scanned, pasted or typed, or from a link the app was
+/// opened with, and a name.
 struct AddContactSheet: View {
     @EnvironmentObject private var model: NodeModel
     @Environment(\.dismiss) private var dismiss
-    @State private var text = ""
+    @State private var text: String
     @State private var name = ""
     @State private var scanning = false
+
+    init(text: String = "") {
+        _text = State(initialValue: text)
+    }
 
     private var address: Address? { parseAddress(text) }
 
@@ -203,6 +208,10 @@ struct AddContactSheet: View {
                 if name.utf8.count > Companion.nameMax {
                     Text("A name is at most \(Companion.nameMax) bytes.").foregroundStyle(.red)
                 }
+                // Opened from a link, the sheet may come before the node is connected.
+                if !model.isConnected {
+                    Text(Words.failure(.closed)).foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Add Contact")
             .toolbar {
@@ -216,7 +225,7 @@ struct AddContactSheet: View {
                             dismiss()
                         }
                     }
-                    .disabled(address == nil || name.utf8.count > Companion.nameMax)
+                    .disabled(address == nil || name.utf8.count > Companion.nameMax || !model.isConnected)
                 }
             }
             #if os(iOS)

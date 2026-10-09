@@ -74,6 +74,12 @@ struct RootView: View {
             }
             // A conversation opened from a notification is on the Chats screen.
             .onChange(of: model.opened) { _ in section = .chats }
+            // A ternmesh.org link opened, as a QR code or a message holds one: whose it is, to add.
+            .onOpenURL { model.open($0) }
+            .sheet(isPresented: Binding(get: { model.linked != nil }, set: { if !$0 { model.linked = nil } })) {
+                AddContactSheet(text: model.linked.map(Sharing.text) ?? "")
+                    .environmentObject(model)
+            }
     }
 
     @ViewBuilder
