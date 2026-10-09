@@ -163,6 +163,8 @@ struct NewChatSheet: View {
 
 /// An address typed or pasted: hex, with any spaces, colons or line breaks taken out.
 func parseAddress(_ text: String) -> Address? {
+    // A link or the text form, as draft/sharing.md writes them; pasted text brings a line break.
+    if let address = Sharing.read(text.trimmingCharacters(in: .whitespacesAndNewlines)) { return address }
     let digits = text.filter { $0.isHexDigit }
     guard digits.count == Address.length * 2,
           text.allSatisfy({ $0.isHexDigit || $0.isWhitespace || $0 == ":" })
