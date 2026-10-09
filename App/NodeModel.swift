@@ -146,6 +146,7 @@ final class NodeModel: ObservableObject {
     /// The update under way, for the node `updateNode`, and the image it sends: kept once
     /// downloaded, so that an update cancelled or failed goes on without downloading again.
     private var updater: Updater?
+    private var updateOffer: FirmwareOffer?
     private var updateNode: UUID?
     private var downloaded: (image: FirmwareImage, bytes: [UInt8])?
     private var firmwareTask: Task<Void, Never>?
@@ -526,13 +527,14 @@ final class NodeModel: ObservableObject {
         guard stillFor(offer) else { return }
         let u = Updater(image: bytes, digest: offer.image.sha256)
         updater = u
+        updateOffer = offer
         u.onChange = { [weak self, weak u] in
             guard let self, let u, self.updater === u else { return }
             self.updaterChanged(u, offer)
         }
         updaterChanged(u, offer)
-        // Over a link that is down, it waits, and goes on once the node answers HELLO again.
-        if let c = link.connection, isConnected { u.resume(on: c) }
+        // Over a link that is down, or still syncing, it waits, and goes on once the node has synced.
+        if let c = link.connection, isReady { u.resume(on: c) }
     }
 
     private func updaterChanged(_ u: Updater, _ offer: FirmwareOffer) {
@@ -545,6 +547,7 @@ final class NodeModel: ObservableObject {
             firmwareStatus = .sending(offer, held: u.held, size: u.size, waiting: waiting, canCancel: canCancel)
         case let .finished(outcome):
             updater = nil
+            updateOffer = nil
             keepAwake(false)
             switch outcome {
             case .restarting: firmwareStatus = .restarting(offer, confirmed: true)
@@ -555,13 +558,26 @@ final class NodeModel: ObservableObject {
         }
     }
 
-    /// The node answered `HELLO`: an update waiting for it goes on, and one sent learns what the
-    /// node now runs.
-    private func nodeReturned() {
-        guard remembered == updateNode, let c = link.connection else { return }
-        if let updater, updater.phase == .waiting || updater.phase == .idle {
+    /// The node has synced: an update waiting for it goes on, if the node is still what it was
+    /// chosen for. While the link was down another client may have changed its region or its
+    /// firmware, and the sync is what says so.
+    private func nodeSynced() {
+        guard remembered == updateNode, let c = link.connection, let updater, let updateOffer,
+              updater.phase == .waiting || updater.phase == .idle else { return }
+        if stillFor(updateOffer) {
             updater.resume(on: c)
-        } else if case let .restarting(offer, confirmed) = firmwareStatus {
+        } else {
+            self.updater = nil
+            self.updateOffer = nil
+            keepAwake(false)
+            updater.cancel()
+        }
+    }
+
+    /// The node answered `HELLO`: one sent an update learns what the node now runs.
+    private func nodeReturned() {
+        guard remembered == updateNode else { return }
+        if case let .restarting(offer, confirmed) = firmwareStatus {
             let running = release ?? ""
             let shown = running.isEmpty ? "firmware with no release" : running
             if ReleaseComparison(offered: offer.release, running: running) == .same {
@@ -634,6 +650,7 @@ final class NodeModel: ObservableObject {
         case .synced:
             take()
             save()
+            nodeSynced()
         case .refused, .gone, .syncRefused:
             break
         }
