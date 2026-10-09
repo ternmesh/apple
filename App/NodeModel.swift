@@ -920,8 +920,9 @@ final class NodeModel: ObservableObject {
         case let .invite(i): (peer, text, id) = (.contact(i.contact), Item.invite(i).summary, i.id)
         default: return
         }
-        guard !isActive || visible != peer else { return }
-        post(identifier: "item-\(id)", peer: peer, body: text)
+        guard !isActive || visible != peer, let node = remembered else { return }
+        // An item's id is its node's: another node's item of the same id is another notification.
+        post(identifier: "item-\(node.uuidString)-\(id)", peer: peer, on: node, body: text)
     }
 
     /// A notification of the conversation `peer` on `node` (the remembered node's, unless said),
