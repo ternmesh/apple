@@ -133,6 +133,7 @@ func words(_ state: BluetoothLink.State) -> String {
     case .unauthorized: return "Tern is not allowed to use Bluetooth."
     case .poweredOff: return "Bluetooth is off."
     case .idle: return "Not connected."
+    case .disconnected: return "Disconnected. Tern stays off the node until you connect. Messages wait for you on the node."
     case .scanning: return "Looking for nodes…"
     case .connecting: return "Connecting…"
     case .pairing: return "Pairing. If asked, type the passkey the node shows."
