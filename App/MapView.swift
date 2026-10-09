@@ -86,13 +86,15 @@ struct MapView: View {
     private var points: [MapPoint] {
         let records = model.records
         let contacts = records.positions.map { address, p in
-            MapPoint(id: "c:\(address)", name: records.name(of: .contact(address)), position: p, isGroup: false)
+            MapPoint(
+                id: "c:\(address)", name: records.name(of: .contact(address)),
+                position: model.counted(p, key: "c:\(address)"), isGroup: false)
         }
         let members = records.groupPositions.map { member, p in
             MapPoint(
                 id: "g:\(member.group):\(Words.routingId(member.from))",
                 name: "\(records.name(of: .group(member.group))) · \(Words.routingId(member.from))",
-                position: p, isGroup: true)
+                position: model.counted(p, key: "g:\(member.group):\(Words.routingId(member.from))"), isGroup: true)
         }
         return (contacts + members).sorted { ($0.position.age, $0.name) < ($1.position.age, $1.name) }
     }
@@ -100,8 +102,12 @@ struct MapView: View {
     /// Whom the node shares with: contacts, then groups, each by name.
     private var sharing: [SharingRow] {
         let records = model.records
-        let contacts = records.sharing.map { SharingRow(peer: .contact($0.key), sharing: $0.value) }
-        let groups = records.groupSharing.map { SharingRow(peer: .group($0.key), sharing: $0.value) }
+        let contacts = records.sharing.keys.compactMap { a in
+            model.sharing(with: .contact(a)).map { SharingRow(peer: .contact(a), sharing: $0) }
+        }
+        let groups = records.groupSharing.keys.compactMap { g in
+            model.sharing(with: .group(g)).map { SharingRow(peer: .group(g), sharing: $0) }
+        }
         let byName: (SharingRow, SharingRow) -> Bool = {
             records.name(of: $0.peer).localizedCaseInsensitiveCompare(records.name(of: $1.peer)) == .orderedAscending
         }

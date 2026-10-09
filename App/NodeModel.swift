@@ -211,6 +211,10 @@ final class NodeModel: ObservableObject {
         location.onFix = { [weak self] fix in self?.give(fix) }
         location.onAuthorization = { [weak self] in self?.locationAuthorizationChanged() }
         locationAllowed = location.isAllowed
+        ticking = Timer.publish(every: 30, on: .main, in: .common).autoconnect().sink { [weak self] now in
+            guard let self, !self.heard.isEmpty else { return }
+            self.clock = now
+        }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
@@ -460,12 +464,55 @@ final class NodeModel: ObservableObject {
     /// Whether the node speaks positions: version 5 or later. Before it, nothing of them is offered.
     var speaksPositions: Bool { (agreed ?? 0) >= 5 }
 
-    /// How the node shares its position with `peer`; nil while it does not.
+    /// How the node shares its position with `peer`, its minutes counted down from when its record
+    /// came; nil while it does not.
     func sharing(with peer: Peer) -> PositionSharing? {
-        switch peer {
-        case let .contact(address): records.sharing[address]
-        case let .group(group): records.groupSharing[group]
+        let found: (PositionSharing, String)? = switch peer {
+        case let .contact(address): records.sharing[address].map { ($0, "sc:\(address)") }
+        case let .group(group): records.groupSharing[group].map { ($0, "sg:\(group)") }
         }
+        guard let found else { return nil }
+        var s = found.0
+        if s.minutes > 0 {
+            let gone = Int(clock.timeIntervalSince(heard[found.1] ?? clock) / 60)
+            s.minutes = UInt16(max(1, Int(s.minutes) - gone))
+        }
+        return s
+    }
+
+    /// `p`, held under `key` as `heard` keys it, its age counted on from when its record came.
+    func counted(_ p: Position, key: String) -> Position {
+        var p = p
+        let since = UInt64(max(0, clock.timeIntervalSince(heard[key] ?? clock)))
+        p.age = UInt32(min(UInt64(p.age) + since, UInt64(UInt32.max)))
+        return p
+    }
+
+    /// The clock positions and sharing are shown against, read every half minute so that ages and
+    /// time left count on while they are on screen.
+    @Published private(set) var clock = Date()
+    private var ticking: AnyCancellable?
+
+    /// When each position and sharing record held arrived: the `age` and `minutes` each gives are
+    /// as of then. Keyed "c:" and an address, "g:" a group and routing id, "sc:" and "sg:" for sharing.
+    private var heard: [String: Date] = [:]
+
+    /// Notes when each position and sharing record in `new` arrived: one that changed, now.
+    private func noteArrivals(_ new: Records) {
+        var keys = Set<String>()
+        func note<K: Hashable, V: Equatable>(_ prefix: String, _ old: [K: V], _ new: [K: V], _ name: (K) -> String) {
+            for (k, v) in new {
+                let key = prefix + name(k)
+                keys.insert(key)
+                if old[k] != v || heard[key] == nil { heard[key] = Date() }
+            }
+        }
+        note("c:", records.positions, new.positions) { "\($0)" }
+        note("g:", records.groupPositions, new.groupPositions) { "\($0.group):\(Words.routingId($0.from))" }
+        note("sc:", records.sharing, new.sharing) { "\($0)" }
+        note("sg:", records.groupSharing, new.groupSharing) { "\($0)" }
+        heard = heard.filter { keys.contains($0.key) }
+        clock = Date()
     }
 
     /// Turns sharing with `peer` on, changes it, or with `PositionSharing.off` turns it off. Only
@@ -791,6 +838,7 @@ final class NodeModel: ObservableObject {
     /// Takes what the connection now holds.
     private func take() {
         guard let c = link.connection else { return }
+        noteArrivals(c.records)
         records = c.records
         conversations = records.conversations
         setUp = remembered.map { isSetUp($0, self.records) } ?? true
