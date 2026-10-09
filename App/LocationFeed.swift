@@ -62,6 +62,13 @@ final class LocationFeed: NSObject, CLLocationManagerDelegate {
         manager.startUpdatingLocation()
     }
 
+    /// Asks for updates again if running. Begun in the background, as when iOS relaunches the app
+    /// for the node's link, updates under when-in-use permission do not start; in front they do.
+    func renew() {
+        guard isRunning, isAllowed else { return }
+        manager.startUpdatingLocation()
+    }
+
     func stop() {
         guard isRunning else { return }
         isRunning = false

@@ -143,7 +143,12 @@ final class NodeModel: ObservableObject {
     /// becoming active: it starts as the application is, not as active.
     var isActive = NodeModel.launchedActive {
         didSet {
-            if isActive { markRead() } else { save() }
+            if isActive {
+                markRead()
+                location.renew()
+            } else {
+                save()
+            }
         }
     }
 
