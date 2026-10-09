@@ -24,7 +24,7 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 11, "every request answered")
         let r = link.connection.records
         XCTAssertEqual(r.me?.region, "EU868")
-        XCTAssertEqual(r.syncedVersion, 3)
+        XCTAssertEqual(r.syncedVersion, Companion.version)
         XCTAssertEqual(r.contacts.values.map(\.name).sorted(), ["Bob", "Carol"])
         XCTAssertEqual(r.contacts.values.map(\.session), [0, 0], "Bob's session ended; Carol never had one")
         XCTAssertEqual(r.groups.values.map(\.name), ["Ridge walkers"], "the group made was left, the one joined renamed")
@@ -78,7 +78,7 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(link.connection.records.syncedVersion, 2)
     }
 
-    /// A client of version 3 talking to a node of version 1 does the same.
+    /// A client of the latest version talking to a node of version 1 does the same.
     func testANodeOfAnEarlierVersionIsNotAskedWhatItCannotDo() throws {
         let node = Node()
         node.version = 1
@@ -158,7 +158,7 @@ final class ConnectionTests: XCTestCase {
         node.time += Companion.answerWait
         node.connection.tick()
         XCTAssertEqual(node.answerAll().map(\.name), ["HELLO", "SET_TIME", "SYNC"])
-        XCTAssertEqual(node.connection.agreed, 3)
+        XCTAssertEqual(node.connection.agreed, Companion.version)
     }
 
     /// Opening again fails what was held only once the new HELLO is out, so a callback that opens
@@ -223,7 +223,7 @@ final class ConnectionTests: XCTestCase {
         node.news(.groupMessage(Node.groupMessage(id: 6, state: MessageState.sent)))
         node.news(.message(Node.message(id: 9, state: MessageState.received)))
         node.answerSync()
-        XCTAssertEqual(node.connection.records.syncedVersion, 3)
+        XCTAssertEqual(node.connection.records.syncedVersion, Companion.version)
 
         node.newsCount &+= 1  // one lost
         node.news(.state(MessageState(id: 9, state: MessageState.received, reason: 0, wait: 0)))
@@ -425,7 +425,7 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(node.events.last, .synced)
     }
 
-    /// A client of version 3 reads a node of version 2's `SYNCED` as the two bytes it is.
+    /// A client of the latest version reads a node of version 2's `SYNCED` as the two bytes it is.
     func testANodeOfVersion2SyncsWithoutTheCount() throws {
         let node = Node()
         node.version = 2
@@ -607,6 +607,8 @@ private final class Node {
 
     var time = 0.0
     var version: UInt8 = Companion.version
+    var board = "heltec-v3"
+    var release = "0.2.0"
     var newsCount: UInt8 = 0
     var sent: [[UInt8]] = []
     var events: [ConnectionEvent] = []
@@ -642,7 +644,8 @@ private final class Node {
         switch request.body {
         case .hello:
             newsCount = 0
-            answer = .info(version: version, firmware: "test")
+            let v4 = min(version, connection.version) >= 4
+            answer = .info(version: version, firmware: "test", board: v4 ? board : nil, release: v4 ? release : nil)
         case .sync: answer = syncedAnswer
         case .send, .sendGroup, .sendInvite: answer = .queued(id: 1)
         case .makeGroup: answer = .made(group: Node.hut)

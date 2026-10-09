@@ -118,9 +118,18 @@ final class CompanionVectorTests: XCTestCase {
                 XCTAssertEqual(Hex.encode(try frame.encode()), f["frame"]!.string, "\(version) \(name)")
             }
         }
-        // And by version 3, version 2's SYNCED is cut short.
+        // And by the latest version, version 2's SYNCED is cut short, and version 3's INFO.
         XCTAssertThrowsError(try Frame.decode([0x43, 0x02]))
         XCTAssertEqual(try Frame.decode([0x43, 0x02], version: 2).body, .synced(news: nil))
+        let info3 = Hex.decode("420104147465726e20302e322e302068656c7465632d7633")!
+        XCTAssertThrowsError(try Frame.decode(info3))
+        // A node of version 3's INFO, read by a client of version 4, is the version 3 it says.
+        XCTAssertEqual(
+            try Frame.decode(Hex.decode("420103047465726e")!).body,
+            .info(version: 3, firmware: "tern", board: nil, release: nil))
+        XCTAssertEqual(
+            try Frame.decode(info3, version: 3).body,
+            .info(version: 4, firmware: "tern 0.2.0 heltec-v3", board: nil, release: nil))
     }
 
     /// A frame of a later version than the one both ends speak is one that version does not
@@ -136,6 +145,9 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertThrowsError(try Frame.decode([0x1A, 1], version: 0)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
         XCTAssertThrowsError(try Frame.decode([0x1A, 1], version: 1)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
         XCTAssertThrowsError(try Frame.decode([0x8A, 1], version: 1)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertThrowsError(try Frame.decode([0x32, 1], version: 3)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertThrowsError(try Frame.decode([0x46, 1, 0, 0, 0, 0], version: 3)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertNoThrow(try Frame.decode([0x32, 1], version: 4))
     }
 
     func testAFrameThatNeverFinishesIsGivenUpAsText() {
@@ -153,6 +165,9 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertThrowsError(try Frame(seq: 1, body: .send(ref: 1, to: bob, text: String(repeating: "x", count: 129))).encode())
         XCTAssertThrowsError(try Frame(seq: 1, body: .saveContact(address: bob, name: String(repeating: "é", count: 16))).encode())
         XCTAssertNoThrow(try Frame(seq: 1, body: .send(ref: 1, to: bob, text: String(repeating: "x", count: 128))).encode())
+        let chunk = [UInt8](repeating: 7, count: Companion.updateChunk)
+        XCTAssertLessThanOrEqual(try Frame(seq: 1, body: .updateData(offset: 0, data: chunk)).encode().count, Companion.maxFrame)
+        XCTAssertThrowsError(try Frame(seq: 1, body: .updateData(offset: 0, data: chunk + [7])).encode())
     }
 
     // MARK: The vectors' fields, by name, as the codec's types.
@@ -191,10 +206,15 @@ final class CompanionVectorTests: XCTestCase {
         case "JOIN": return .join(id: u32("id"))
         case "OK": return .ok
         case "ERROR": return .error(code: u8("code"))
-        case "INFO": return .info(version: u8("version"), firmware: str("firmware"))
+        case "INFO":
+            return .info(version: u8("version"), firmware: str("firmware"), board: f["board"]?.string, release: f["release"]?.string)
         case "SYNCED": return .synced(news: f["news"].map { UInt8($0.int) })
         case "QUEUED": return .queued(id: u32("id"))
         case "MADE": return .made(group: gid("group"))
+        case "UPDATE_BEGIN": return .updateBegin(size: u32("size"), digest: Digest(f["digest"]!.bytes)!)
+        case "UPDATE_DATA": return .updateData(offset: u32("offset"), data: f["data"]!.bytes)
+        case "UPDATE_END": return .updateEnd
+        case "UPDATING": return .updating(offset: u32("offset"))
         case "SELF":
             return .nodeSelf(NodeSelf(
                 address: addr("address"), role: u8("role"), region: str("region"), power: i8("power"), time: u32("time")))

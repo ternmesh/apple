@@ -56,7 +56,24 @@ public enum Words {
         case ErrorCode.mtu: "The Bluetooth link is too small for the node's frames."
         case ErrorCode.notNow: "The node is busy. Try again in a moment."
         case ErrorCode.notHeld: "The node does not hold that group or invite."
+        case ErrorCode.notThere: "The node is not where the update was."
+        case ErrorCode.notAnImage: "That is not firmware this node runs."
         default: "The node refused (\(code))."
+        }
+    }
+
+    /// How an update ended, as it is known when it ends. The node's next `INFO` says the rest.
+    public static func update(_ outcome: UpdateOutcome) -> String {
+        switch outcome {
+        case .restarting: "The node has the new firmware, and is restarting into it."
+        case .unconfirmed: "The node did not answer at the end. It may be restarting into the new firmware."
+        case .refused(ErrorCode.noRoom), .unsupported:
+            "This node can't be updated over Bluetooth. Flash it once over USB at ternmesh.org/flash."
+        case .refused(ErrorCode.notAnImage):
+            "The node refused the image: it is not firmware this node runs. It discarded it, and runs what it ran before."
+        case let .refused(code): error(code)
+        case .confused: "The node answered something the update did not expect."
+        case .cancelled: "Update cancelled."
         }
     }
 

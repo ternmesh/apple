@@ -38,6 +38,35 @@ struct KnownNode: Identifiable, Equatable {
     var chosen: Date
 }
 
+/// A release of the firmware, and the image in it for the node.
+struct FirmwareOffer: Equatable {
+    var release: String
+    var image: FirmwareImage
+    /// The release against the one the node runs.
+    var comparison: ReleaseComparison
+}
+
+/// Where updating the node's firmware is.
+enum FirmwareStatus: Equatable {
+    /// Not looked for.
+    case idle
+    case checking
+    /// The site's release, for the node's board and region.
+    case found(FirmwareOffer)
+    /// Nothing to offer, and why.
+    case nothing(String)
+    case downloading(FirmwareOffer)
+    /// Sending it to the node: `held` of `size` bytes, as the node has said. `waiting` while the
+    /// link is down; it goes on when it is back.
+    case sending(FirmwareOffer, held: Int, size: Int, waiting: Bool, canCancel: Bool)
+    /// Sent, and waiting for the node to come back and say what it runs. `confirmed` if it
+    /// answered `UPDATE_END`, false if that answer never came.
+    case restarting(FirmwareOffer, confirmed: Bool)
+    /// How it ended, in words.
+    case done(String)
+    case failed(String)
+}
+
 /// Someone not in the contacts tried to reach the node, and was refused.
 struct Asked: Identifiable, Equatable {
     var id: Address { address }
@@ -65,6 +94,11 @@ final class NodeModel: ObservableObject {
         didSet { keepAsked() }
     }
     @Published private(set) var firmware: String?
+    /// The node's board and release, from an `INFO` of version 4 or later; nil before. An empty
+    /// board is a node that cannot be updated over Bluetooth.
+    @Published private(set) var board: String?
+    @Published private(set) var release: String?
+    @Published private(set) var firmwareStatus = FirmwareStatus.idle
     @Published private(set) var nodeVersion: UInt8?
     /// The version both ends speak, once the node has answered.
     @Published private(set) var agreed: UInt8?
@@ -95,6 +129,12 @@ final class NodeModel: ObservableObject {
     /// The greatest id the node has answered a send with. Its record may not have come yet, so a
     /// send made now matches only records past it: one the node queues for it is given a greater id.
     private var queuedFloor: UInt32 = 0
+    /// The update under way, for the node `updateNode`, and the image it sends: kept once
+    /// downloaded, so that an update cancelled or failed goes on without downloading again.
+    private var updater: Updater?
+    private var updateNode: UUID?
+    private var downloaded: (image: FirmwareImage, bytes: [UInt8])?
+    private var firmwareTask: Task<Void, Never>?
     private static let nameKey = "org.ternmesh.tern.nodeName"
     private static let knownKey = "org.ternmesh.tern.known"
 
@@ -151,6 +191,7 @@ final class NodeModel: ObservableObject {
             firmware = nil
             nodeVersion = nil
             agreed = nil
+            resetFirmware()
         }
         remembered = id
         nodeName = name
@@ -198,6 +239,7 @@ final class NodeModel: ObservableObject {
         firmware = nil
         nodeVersion = nil
         agreed = nil
+        resetFirmware()
     }
 
     var isConnected: Bool { linkState == .ready || linkState == .syncing }
@@ -323,6 +365,172 @@ final class NodeModel: ObservableObject {
         return true
     }
 
+    // MARK: Firmware
+
+    /// Asks the site for its latest release, and finds the image in it for the node.
+    func checkForUpdate() {
+        guard let board, !board.isEmpty else { return }
+        guard let region = records.me?.region, !region.isEmpty else {
+            firmwareStatus = .nothing("Set the node's region first: each region has its own image.")
+            return
+        }
+        let running = release ?? ""
+        firmwareStatus = .checking
+        firmwareTask?.cancel()
+        firmwareTask = Task { [weak self] in
+            let status: FirmwareStatus
+            do {
+                let manifest = try FirmwareManifest(json: try await Self.fetch(FirmwareManifest.latest, fresh: true))
+                if let image = manifest.image(board: board, region: region) {
+                    status = .found(FirmwareOffer(
+                        release: manifest.release, image: image, comparison: manifest.compared(to: running)))
+                } else {
+                    status = .nothing("There is no firmware for \(board) in \(region) in release \(manifest.release).")
+                }
+            } catch is CancellationError {
+                return
+            } catch is FirmwareManifest.ReadError {
+                status = .failed("The list of releases could not be read.")
+            } catch {
+                status = .failed("Could not reach ternmesh.org. \(error.localizedDescription)")
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.firmwareStatus = status
+        }
+    }
+
+    /// Downloads the image offered, checks it, and sends it to the node.
+    func update() {
+        guard case let .found(offer) = firmwareStatus, let id = remembered else { return }
+        updateNode = id
+        if let d = downloaded, d.image == offer.image { return send(d.bytes, offer) }
+        firmwareStatus = .downloading(offer)
+        firmwareTask?.cancel()
+        firmwareTask = Task { [weak self] in
+            let failure: String
+            do {
+                let bytes = try await Self.fetch(offer.image.url, fresh: false)
+                let image = offer.image
+                // A megabyte's digest takes a moment: not on the main thread.
+                let good = await Task.detached(priority: .userInitiated) { image.matches(bytes) }.value
+                guard let self, !Task.isCancelled else { return }
+                guard good else {
+                    self.firmwareStatus = .failed("The image downloaded is not the one the release lists. Try again.")
+                    return
+                }
+                self.downloaded = (image, bytes)
+                self.send(bytes, offer)
+                return
+            } catch is CancellationError {
+                return
+            } catch {
+                failure = "Could not download the firmware. \(error.localizedDescription)"
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.firmwareStatus = .failed(failure)
+        }
+    }
+
+    /// Stops a download, or the sending: the node keeps what it was sent until it restarts, and
+    /// updating again goes on from there.
+    func cancelUpdate() {
+        switch firmwareStatus {
+        case let .downloading(offer):
+            firmwareTask?.cancel()
+            firmwareTask = nil
+            firmwareStatus = .found(offer)
+        case .sending:
+            updater?.cancel()
+        default:
+            break
+        }
+    }
+
+    private func send(_ bytes: [UInt8], _ offer: FirmwareOffer) {
+        let u = Updater(image: bytes, digest: offer.image.sha256)
+        updater = u
+        u.onChange = { [weak self, weak u] in
+            guard let self, let u, self.updater === u else { return }
+            self.updaterChanged(u, offer)
+        }
+        keepAwake(true)
+        updaterChanged(u, offer)
+        // Over a link that is down, it waits, and goes on once the node answers HELLO again.
+        if let c = link.connection, isConnected { u.resume(on: c) }
+    }
+
+    private func updaterChanged(_ u: Updater, _ offer: FirmwareOffer) {
+        switch u.phase {
+        case .idle, .waiting, .beginning, .sending, .ending:
+            let canCancel = u.phase != .ending
+            let waiting = u.phase == .waiting || u.phase == .idle
+            firmwareStatus = .sending(offer, held: u.held, size: u.size, waiting: waiting, canCancel: canCancel)
+        case let .finished(outcome):
+            updater = nil
+            keepAwake(false)
+            switch outcome {
+            case .restarting: firmwareStatus = .restarting(offer, confirmed: true)
+            case .unconfirmed: firmwareStatus = .restarting(offer, confirmed: false)
+            case .cancelled: firmwareStatus = .found(offer)
+            default: firmwareStatus = .failed(Words.update(outcome))
+            }
+        }
+    }
+
+    /// The node answered `HELLO`: an update waiting for it goes on, and one sent learns what the
+    /// node now runs.
+    private func nodeReturned() {
+        guard remembered == updateNode, let c = link.connection else { return }
+        if let updater, updater.phase == .waiting || updater.phase == .idle {
+            updater.resume(on: c)
+        } else if case let .restarting(offer, confirmed) = firmwareStatus {
+            let running = release ?? ""
+            let shown = running.isEmpty ? "firmware with no release" : running
+            if ReleaseComparison(offered: offer.release, running: running) == .same {
+                firmwareStatus = .done("Updated to \(offer.release).")
+            } else if confirmed {
+                firmwareStatus = .done(
+                    "The node came back running \(shown): the new firmware did not start, and it went back to what it ran before.")
+            } else {
+                firmwareStatus = .done(
+                    "The node came back running \(shown): the update did not take. Try again, and it goes on from where it stopped.")
+            }
+            downloaded = nil
+        }
+    }
+
+    private func resetFirmware() {
+        firmwareTask?.cancel()
+        firmwareTask = nil
+        updater?.cancel()
+        updater = nil
+        updateNode = nil
+        downloaded = nil
+        board = nil
+        release = nil
+        firmwareStatus = .idle
+        keepAwake(false)
+    }
+
+    /// Keeps the screen on while the node is sent its firmware: Bluetooth goes on in the
+    /// background, but more slowly, and a minute's lock is a while for a few minutes' update.
+    private func keepAwake(_ on: Bool) {
+        #if os(iOS)
+        UIApplication.shared.isIdleTimerDisabled = on
+        #endif
+    }
+
+    private static func fetch(_ address: String, fresh: Bool) async throws -> [UInt8] {
+        guard let url = URL(string: address) else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        if fresh { request.cachePolicy = .reloadIgnoringLocalCacheData }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return [UInt8](data)
+    }
+
     // MARK: What the connection says
 
     private func handle(_ event: ConnectionEvent) {
@@ -331,6 +539,9 @@ final class NodeModel: ObservableObject {
             firmware = fw
             nodeVersion = version
             agreed = link.connection?.agreed
+            board = link.connection?.board
+            release = link.connection?.release
+            nodeReturned()
         case let .news(body):
             if case let .asked(address, why) = body {
                 // A saved contact turned away for want of room is news too: only the offer to save

@@ -1,9 +1,9 @@
-// Building and reading frames, field by field: big-endian numbers, 32-byte addresses, and text as
-// a length byte then UTF-8.
+// Building and reading frames, field by field: big-endian numbers, 32-byte addresses and digests,
+// and text and bytes as a length byte then the bytes.
 
 /// Why a frame was not built. These are the caller's mistakes, not the wire's.
 public enum EncodeError: Error, Equatable {
-    /// Text longer than its field allows, in bytes of UTF-8.
+    /// Text or bytes longer than the field allows, in bytes.
     case tooLong(field: String, limit: Int)
     /// A frame longer than `Companion.maxFrame`.
     case frameTooLong(Int)
@@ -15,8 +15,8 @@ public enum DecodeError: Error, Equatable {
     case short
     /// A type, or a setting, this version does not define.
     case undefined
-    /// Shorter than its fields, a string longer than its field allows or not UTF-8, or longer
-    /// than a frame may be.
+    /// Shorter than its fields, a string or bytes longer than its field allows, a string not
+    /// UTF-8, or longer than a frame may be.
     case malformed
 }
 
@@ -31,7 +31,7 @@ extension Frame {
             w.u8(version)
         case let .sync(after):
             w.u32(after)
-        case .ping, .ok:
+        case .ping, .ok, .updateEnd:
             break
         case let .synced(news):
             if let news { w.u8(news) }
@@ -72,11 +72,24 @@ extension Frame {
             w.addr(to)
         case let .join(id):
             w.u32(id)
+        case let .updateBegin(size, digest):
+            w.u32(size)
+            w.digest(digest)
+        case let .updateData(offset, data):
+            w.u32(offset)
+            try w.blob(data, limit: Companion.updateChunk, field: "data")
+        case let .updating(offset):
+            w.u32(offset)
         case let .error(code):
             w.u8(code)
-        case let .info(version, firmware):
+        case let .info(version, firmware, board, release):
             w.u8(version)
             try w.str(firmware, limit: Companion.firmwareMax, field: "firmware")
+            // Version 4's fields, both or neither.
+            if board != nil || release != nil {
+                try w.str(board ?? "", limit: Companion.boardMax, field: "board")
+                try w.str(release ?? "", limit: Companion.releaseMax, field: "release")
+            }
         case let .queued(id):
             w.u32(id)
         case let .nodeSelf(s):
@@ -185,12 +198,27 @@ extension Frame {
         case 0x23: body = .sendGroup(ref: try r.u32(), group: try r.gid(), text: try r.str(limit: Companion.textMax))
         case 0x24: body = .sendInvite(group: try r.gid(), to: try r.addr())
         case 0x25: body = .join(id: try r.u32())
+        case 0x30: body = .updateBegin(size: try r.u32(), digest: try r.digest())
+        case 0x31: body = .updateData(offset: try r.u32(), data: try r.blob(limit: Companion.updateChunk))
+        case 0x32: body = .updateEnd
         case 0x40: body = .ok
         case 0x41: body = .error(code: try r.u8())
-        case 0x42: body = .info(version: try r.u8(), firmware: try r.str(limit: Companion.firmwareMax))
+        case 0x42:
+            let v = try r.u8()
+            let firmware = try r.str(limit: Companion.firmwareMax)
+            // `INFO` is how a client learns the node's version, so it is read by the lesser of the
+            // two: a node of version 3 sends a client of version 4 neither `board` nor `release`.
+            if min(v, version) >= 4 {
+                body = .info(
+                    version: v, firmware: firmware, board: try r.str(limit: Companion.boardMax),
+                    release: try r.str(limit: Companion.releaseMax))
+            } else {
+                body = .info(version: v, firmware: firmware, board: nil, release: nil)
+            }
         case 0x43: body = .synced(news: version >= 3 ? try r.u8() : nil)
         case 0x44: body = .queued(id: try r.u32())
         case 0x45: body = .made(group: try r.gid())
+        case 0x46: body = .updating(offset: try r.u32())
         case 0x80:
             body = .nodeSelf(NodeSelf(
                 address: try r.addr(), role: try r.u8(), region: try r.str(limit: Companion.regionMax),
@@ -249,6 +277,12 @@ struct Writer {
     }
     mutating func addr(_ a: Address) { bytes += a.bytes }
     mutating func gid(_ g: GroupID) { bytes += g.bytes }
+    mutating func digest(_ d: Digest) { bytes += d.bytes }
+    mutating func blob(_ b: [UInt8], limit: Int, field: String) throws {
+        guard b.count <= limit else { throw EncodeError.tooLong(field: field, limit: limit) }
+        bytes.append(UInt8(b.count))
+        bytes += b
+    }
     mutating func str(_ s: String, limit: Int, field: String) throws {
         let utf8 = Array(s.utf8)
         guard utf8.count <= limit else { throw EncodeError.tooLong(field: field, limit: limit) }
@@ -273,6 +307,12 @@ struct Reader {
     mutating func u32() throws -> UInt32 { try take(4).reduce(0) { $0 << 8 | UInt32($1) } }
     mutating func addr() throws -> Address { Address(Array(try take(Address.length)))! }
     mutating func gid() throws -> GroupID { GroupID(Array(try take(GroupID.length)))! }
+    mutating func digest() throws -> Digest { Digest(Array(try take(Digest.length)))! }
+    mutating func blob(limit: Int) throws -> [UInt8] {
+        let n = Int(try u8())
+        guard n <= limit else { throw DecodeError.malformed }
+        return Array(try take(n))
+    }
     mutating func str(limit: Int) throws -> String {
         let n = Int(try u8())
         guard n <= limit else { throw DecodeError.malformed }

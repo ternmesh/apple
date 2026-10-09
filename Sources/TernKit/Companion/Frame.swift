@@ -1,19 +1,22 @@
-// The companion protocol's frames, version 3: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 4: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 2 is this without `SYNCED`'s `news`, version 1
-    /// is version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 3
+    /// The version this client speaks. Version 3 is this without updates (the requests `0x30` to
+    /// `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s `board` and `release`), version 2 is
+    /// version 3 without `SYNCED`'s `news`, version 1 is version 2 without groups, and version 0
+    /// is version 1 without `END_SESSION` and `ASKED`.
+    public static let version: UInt8 = 4
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
         switch type {
         case 0x1A, 0x89: 1
         case 0x20...0x25, 0x45, 0x8A...0x8D: 2
+        case 0x30...0x32, 0x46: 4
         default: 0
         }
     }
@@ -22,6 +25,11 @@ public enum Companion {
     public static let nameMax = 31
     public static let regionMax = 15
     public static let firmwareMax = 31
+    /// `INFO`'s `board` and `release`.
+    public static let boardMax = 31
+    public static let releaseMax = 31
+    /// The longest `data` an `UPDATE_DATA` carries, and what a client sends in all but the last.
+    public static let updateChunk = 172
     /// How long a client waits for an answer, in seconds.
     public static let answerWait = 5.0
     /// The longest a client goes without a request, in seconds.
@@ -81,6 +89,24 @@ public struct GroupID: Hashable, Sendable, CustomStringConvertible {
     public var description: String { Hex.encode(bytes) }
 }
 
+/// A SHA-256 digest, as `UPDATE_BEGIN` carries an image's.
+public struct Digest: Hashable, Sendable, CustomStringConvertible {
+    public static let length = 32
+    public let bytes: [UInt8]
+
+    public init?(_ bytes: [UInt8]) {
+        guard bytes.count == Digest.length else { return nil }
+        self.bytes = bytes
+    }
+
+    public init?(hex: String) {
+        guard let bytes = Hex.decode(hex) else { return nil }
+        self.init(bytes)
+    }
+
+    public var description: String { Hex.encode(bytes) }
+}
+
 /// An `ERROR`'s code. A code this client does not know is a refusal all the same.
 public enum ErrorCode {
     /// A request, or a setting, the node's version does not define.
@@ -90,7 +116,8 @@ public enum ErrorCode {
     public static let refused: UInt8 = 3
     /// Not a valid address, or the node's own.
     public static let badAddress: UInt8 = 4
-    /// The node cannot hold another contact, message or group.
+    /// The node cannot hold another contact, message or group, or the image an update offers. A
+    /// node whose `board` is empty answers `UPDATE_BEGIN` with it.
     public static let noRoom: UInt8 = 5
     /// `HELLO` first: on a connection that had one, the node has taken the client for gone.
     public static let helloFirst: UInt8 = 6
@@ -100,6 +127,11 @@ public enum ErrorCode {
     public static let notNow: UInt8 = 8
     /// A group the node is not in, or an invite it does not hold.
     public static let notHeld: UInt8 = 9
+    /// Not where the update is: none is under way, or not at that offset. `UPDATE_BEGIN` again
+    /// says where to go on from.
+    public static let notThere: UInt8 = 10
+    /// Not an image this node runs, or its digest is wrong: the update is discarded.
+    public static let notAnImage: UInt8 = 11
 }
 
 /// A frame: its sequence number and what it says. The type byte follows from the body.
@@ -339,7 +371,7 @@ public struct Power: Equatable, Sendable {
     }
 }
 
-/// What a frame says: every frame of version 3.
+/// What a frame says: every frame of version 4.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -358,16 +390,27 @@ public enum Body: Equatable, Sendable {
     case sendGroup(ref: UInt32, group: GroupID, text: String)
     case sendInvite(group: GroupID, to: Address)
     case join(id: UInt32)
+    /// An image of `size` bytes, whose SHA-256 is `digest`, follows.
+    case updateBegin(size: UInt32, digest: Digest)
+    /// The image's bytes from `offset`: `Companion.updateChunk` of them, all but the last.
+    case updateData(offset: UInt32, data: [UInt8])
+    /// Run the image. Never sent again once given up on: the node may be restarting into it.
+    case updateEnd
 
     // Answers, sent by the node with the request's seq.
     case ok
     case error(code: UInt8)
-    case info(version: UInt8, firmware: String)
+    /// `board` and `release` are nil from a node, or to a client, of version 3 or earlier, whose
+    /// `INFO` has neither. `board` is empty if the node cannot be updated over this protocol, and
+    /// `release` if its firmware has no version, as a build made by hand may not.
+    case info(version: UInt8, firmware: String, board: String?, release: String?)
     /// The sync is done. `news` is the node's count as it answers, the `seq` of its next news
     /// frame; nil from a node of version 2 or earlier, whose `SYNCED` has no fields.
     case synced(news: UInt8?)
     case queued(id: UInt32)
     case made(group: GroupID)
+    /// The offset an update goes on from.
+    case updating(offset: UInt32)
 
     // News, sent by the node with its count as seq.
     case nodeSelf(NodeSelf)
@@ -406,12 +449,16 @@ public enum Body: Equatable, Sendable {
         case .sendGroup: 0x23
         case .sendInvite: 0x24
         case .join: 0x25
+        case .updateBegin: 0x30
+        case .updateData: 0x31
+        case .updateEnd: 0x32
         case .ok: 0x40
         case .error: 0x41
         case .info: 0x42
         case .synced: 0x43
         case .queued: 0x44
         case .made: 0x45
+        case .updating: 0x46
         case .nodeSelf: 0x80
         case .contact: 0x81
         case .contactGone: 0x82
@@ -448,12 +495,16 @@ public enum Body: Equatable, Sendable {
         case .sendGroup: "SEND_GROUP"
         case .sendInvite: "SEND_INVITE"
         case .join: "JOIN"
+        case .updateBegin: "UPDATE_BEGIN"
+        case .updateData: "UPDATE_DATA"
+        case .updateEnd: "UPDATE_END"
         case .ok: "OK"
         case .error: "ERROR"
         case .info: "INFO"
         case .synced: "SYNCED"
         case .queued: "QUEUED"
         case .made: "MADE"
+        case .updating: "UPDATING"
         case .nodeSelf: "SELF"
         case .contact: "CONTACT"
         case .contactGone: "CONTACT_GONE"
