@@ -400,7 +400,7 @@ final class NodeModel: ObservableObject {
         guard let c = link.connection else { return }
         records = c.records
         conversations = records.conversations
-        setUp = remembered.map { isSetUp($0, records) } ?? true
+        setUp = remembered.map { isSetUp($0, self.records) } ?? true
         showUnread()
         // An unanswered send that the records now show the node holding went: it needs no retry.
         let records = self.records
