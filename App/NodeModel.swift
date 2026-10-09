@@ -149,6 +149,7 @@ final class NodeModel: ObservableObject {
             remembered = id
             records = Self.load(id)
             conversations = records.conversations
+            showUnread()
             outgoing = Self.loadOutgoing(id)
             asked = Self.loadAsked(id)
             seen = [:]
