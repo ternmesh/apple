@@ -1,4 +1,4 @@
-// The app: one window of the node's conversations, contacts and settings, over one model.
+// The app: one window of the node's conversations, contacts, map and settings, over one model.
 
 import SwiftUI
 import TernKit
@@ -41,6 +41,7 @@ struct RootView: View {
     enum Pane: String, CaseIterable, Identifiable {
         case chats = "Chats"
         case contacts = "Contacts"
+        case map = "Map"
         case node = "Node"
         case connect = "Connect"
 
@@ -50,6 +51,7 @@ struct RootView: View {
             switch self {
             case .chats: "bubble.left.and.bubble.right"
             case .contacts: "person.2"
+            case .map: "map"
             case .node: "antenna.radiowaves.left.and.right"
             case .connect: "dot.radiowaves.left.and.right"
             }
@@ -101,6 +103,7 @@ struct RootView: View {
         switch s {
         case .chats: ChatsView()
         case .contacts: ContactsView()
+        case .map: MapView()
         case .node: NodeView()
         case .connect: ConnectView()
         }
