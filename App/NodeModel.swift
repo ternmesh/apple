@@ -470,7 +470,7 @@ final class NodeModel: ObservableObject {
     var speaksPositions: Bool { (agreed ?? 0) >= 5 }
 
     /// How the node shares its position with `peer`, its minutes counted down from when its record
-    /// came; nil while it does not.
+    /// came; nil while it does not, or once those minutes have passed.
     func sharing(with peer: Peer) -> PositionSharing? {
         let found: (PositionSharing, String)? = switch peer {
         case let .contact(address): records.sharing[address].map { ($0, "sc:\(address)") }
@@ -480,6 +480,8 @@ final class NodeModel: ObservableObject {
         var s = found.0
         if s.minutes > 0 {
             let gone = Int(clock.timeIntervalSince(heard[found.1] ?? clock) / 60)
+            // Run out: the node has turned it off, though with the link down no record said so.
+            guard gone < Int(s.minutes) else { return nil }
             s.minutes = UInt16(max(1, Int(s.minutes) - gone))
         }
         return s
