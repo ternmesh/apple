@@ -4,6 +4,8 @@
 <dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Tern talks to your Tern node over Bluetooth, to send and receive your messages.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Tern reads the QR code on another Tern node or app, to add it as a contact.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<!-- One scene on iPad too: the model knows one conversation on screen. -->

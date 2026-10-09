@@ -62,4 +62,8 @@ jobs:
             echo "::warning::Tests/TernKitTests/vectors/companion.json differs from the specification's. Copy the new file in the pull request that changes the code to match."
           fi
           cp spec/vectors/companion.json Tests/TernKitTests/vectors/companion.json
+          if ! cmp -s spec/vectors/sharing.json Tests/TernKitTests/vectors/sharing.json; then
+            echo "::warning::Tests/TernKitTests/vectors/sharing.json differs from the specification's. Copy the new file in the pull request that changes the code to match."
+          fi
+          cp spec/vectors/sharing.json Tests/TernKitTests/vectors/sharing.json
       - run: swift test

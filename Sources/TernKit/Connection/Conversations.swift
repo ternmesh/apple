@@ -72,6 +72,11 @@ extension Address {
     public var short: String { String(description.prefix(8)) + "…" }
 }
 
+/// A contact is its address: the node holds one contact for each.
+extension Contact: Identifiable {
+    public var id: Address { address }
+}
+
 extension GroupID {
     public var short: String { String(description.prefix(8)) + "…" }
 }
