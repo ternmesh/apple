@@ -77,7 +77,10 @@ struct RootView: View {
             // A ternmesh.org link opened, as a QR code or a message holds one: whose it is, to add.
             .onOpenURL { model.open($0) }
             .sheet(isPresented: Binding(get: { model.linked != nil }, set: { if !$0 { model.linked = nil } })) {
+                // Each link is a sheet of its own: a second one opened while the first is up
+                // replaces its address, which the sheet's state would otherwise keep.
                 AddContactSheet(text: model.linked.map(Sharing.text) ?? "")
+                    .id(model.linked)
                     .environmentObject(model)
             }
     }

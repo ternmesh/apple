@@ -924,11 +924,13 @@ final class NodeModel: ObservableObject {
         post(identifier: "item-\(id)", peer: peer, body: text)
     }
 
-    /// A notification of the conversation `peer`, which opens it when tapped and can be replied to.
-    private func post(identifier: String, peer: Peer, subtitle: String? = nil, body: String) {
-        guard let node = remembered else { return }
+    /// A notification of the conversation `peer` on `node` (the remembered node's, unless said),
+    /// which opens it when tapped and can be replied to. Another node's is titled without these
+    /// records, which are not its.
+    private func post(identifier: String, peer: Peer, on node: UUID? = nil, subtitle: String? = nil, body: String) {
+        guard let node = node ?? remembered else { return }
         let content = UNMutableNotificationContent()
-        content.title = records.name(of: peer)
+        content.title = node == remembered ? records.name(of: peer) : "Tern"
         if let subtitle { content.subtitle = subtitle }
         content.body = body
         content.sound = .default
@@ -960,9 +962,11 @@ final class NodeModel: ObservableObject {
     /// lost: another notification says why, with the text to send again.
     func reply(_ text: String, to peer: Peer, on node: UUID) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, node == remembered else { return }
+        guard !text.isEmpty else { return }
         let why: String
-        if Words.textBytes(text) > Companion.textMax {
+        if node != remembered {
+            why = "Tern is connected to another node now."
+        } else if Words.textBytes(text) > Companion.textMax {
             why = "At most \(Companion.textMax) bytes."
         } else if case let .group(g) = peer, records.groups[g] == nil {
             why = "You are not in this group."
@@ -974,7 +978,7 @@ final class NodeModel: ObservableObject {
             send(text, to: peer)
             return
         }
-        post(identifier: "reply-\(UUID().uuidString)", peer: peer, subtitle: "Reply not sent. \(why)", body: text)
+        post(identifier: "reply-\(UUID().uuidString)", peer: peer, on: node, subtitle: "Reply not sent. \(why)", body: text)
     }
 
     // MARK: On disk
