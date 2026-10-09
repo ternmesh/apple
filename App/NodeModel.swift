@@ -107,6 +107,8 @@ final class NodeModel: ObservableObject {
     @Published private(set) var board: String?
     @Published private(set) var release: String?
     @Published private(set) var firmwareStatus = FirmwareStatus.idle
+    /// The release the node ran when it was last checked for an update: what the offer was weighed against.
+    private var checkedAgainst: String?
     @Published private(set) var nodeVersion: UInt8?
     /// The version both ends speak, once the node has answered.
     @Published private(set) var agreed: UInt8?
@@ -383,6 +385,7 @@ final class NodeModel: ObservableObject {
             return
         }
         let running = release ?? ""
+        checkedAgainst = running
         firmwareStatus = .checking
         firmwareTask?.cancel()
         firmwareTask = Task { [weak self] in
@@ -411,8 +414,10 @@ final class NodeModel: ObservableObject {
     func update() {
         guard case let .found(offer) = firmwareStatus, let id = remembered else { return }
         // The region may have been changed since the check: an image is for one region.
+        // So may its firmware, by another client: what was newer then may not be now.
         guard offer.image.board.lowercased() == board?.lowercased(),
-              offer.image.region.lowercased() == records.me?.region.lowercased() else {
+              offer.image.region.lowercased() == records.me?.region.lowercased(),
+              (release ?? "") == checkedAgainst else {
             firmwareStatus = .nothing("The node has changed since the check. Check for an update again.")
             return
         }
