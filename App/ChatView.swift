@@ -188,7 +188,8 @@ struct ChatView: View {
             }
             Button("Invite a Contact") { inviting = true }
                 .disabled(model.records.contacts.isEmpty)
-            if model.speaksPositions {
+            // Only while the node holds the group: a left group's conversation stays.
+            if model.speaksPositions, model.records.groups[group] != nil {
                 Button("Share My Location…") { sharingLocation = true }
             }
             Button("Leave Group", role: .destructive) { leaving = true }
