@@ -39,7 +39,7 @@ public enum Sharing {
 
     /// The twelve digits two people compare, as a number.
     public static func shortCodeValue(_ address: Address) -> UInt64 {
-        let h = SHA256.hash(shortCodeLabel + address.bytes)
+        let h = SHA256.hash(shortCodeLabel + address.bytes).bytes
         let n = h[0 ..< 8].reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
         return n % 1_000_000_000_000
     }

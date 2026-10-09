@@ -44,10 +44,10 @@ final class SharingVectorTests: XCTestCase {
     }
 
     func testSHA256() {
-        XCTAssertEqual(Hex.encode(SHA256.hash([])), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
-        XCTAssertEqual(Hex.encode(SHA256.hash(Array("abc".utf8))), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        XCTAssertEqual(Hex.encode(SHA256.hash([]).bytes), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        XCTAssertEqual(Hex.encode(SHA256.hash(Array("abc".utf8)).bytes), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
         XCTAssertEqual(
-            Hex.encode(SHA256.hash(Array(repeating: UInt8(ascii: "a"), count: 1000))),
+            Hex.encode(SHA256.hash(Array(repeating: UInt8(ascii: "a"), count: 1000)).bytes),
             "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3")
     }
 }

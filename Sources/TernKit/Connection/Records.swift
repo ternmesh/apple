@@ -1,6 +1,6 @@
 // What a client holds of a node: the records its news gave, kept as the specification's "What the
 // node holds" says. A record replaces the one before it; STATE changes a message in place; a sync
-// is the whole list of contacts, groups and neighbours, but not of messages.
+// is the whole list of contacts, groups, neighbours, positions and sharing, but not of messages.
 
 /// A message, group message or invite: the three records that share the node's count of `id`s,
 /// and a message's states.
@@ -63,6 +63,17 @@ public enum Item: Equatable, Sendable {
     }
 }
 
+/// Whom a group position is from: the group, and the routing id a member claimed in it.
+public struct GroupMember: Hashable, Sendable {
+    public var group: GroupID
+    public var from: UInt32
+
+    public init(group: GroupID, from: UInt32) {
+        self.group = group
+        self.from = from
+    }
+}
+
 /// Everything a client has been told of one node. A value: an app keeps it between connections,
 /// and on disk between runs, so that the next sync asks only for what is new.
 public struct Records: Equatable, Sendable {
@@ -72,6 +83,13 @@ public struct Records: Equatable, Sendable {
     /// Messages, group messages and invites, by `id`.
     public var items: [UInt32: Item] = [:]
     public var neighbours: [UInt32: Neighbour] = [:]
+    /// Positions the node holds from contacts, and from members of groups. Never one whose
+    /// precision is 0: that record says there is none.
+    public var positions: [Address: Position] = [:]
+    public var groupPositions: [GroupMember: Position] = [:]
+    /// Whom the node shares its position with, and how. Never sharing that is off.
+    public var sharing: [Address: PositionSharing] = [:]
+    public var groupSharing: [GroupID: PositionSharing] = [:]
     public var airtime: Airtime?
     public var power: Power?
     /// The version both ends spoke at the last sync that finished, nil if none has. A node may
@@ -82,14 +100,25 @@ public struct Records: Equatable, Sendable {
     /// lost may be below records received after it, in this run or the one before.
     public var missedSince: UInt32?
 
-    /// What the sync under way has sent of the three lists a sync gives whole.
-    private var syncing: (contacts: Set<Address>, groups: Set<GroupID>, neighbours: Set<UInt32>)?
+    /// What the sync under way has sent of the lists a sync gives whole.
+    private var syncing: Seen?
+
+    private struct Seen {
+        var contacts: Set<Address> = []
+        var groups: Set<GroupID> = []
+        var neighbours: Set<UInt32> = []
+        var positions: Set<Address> = []
+        var groupPositions: Set<GroupMember> = []
+        var sharing: Set<Address> = []
+        var groupSharing: Set<GroupID> = []
+    }
 
     public init() {}
 
     public static func == (a: Records, b: Records) -> Bool {
         a.me == b.me && a.contacts == b.contacts && a.groups == b.groups && a.items == b.items
-            && a.neighbours == b.neighbours && a.airtime == b.airtime && a.power == b.power
+            && a.neighbours == b.neighbours && a.positions == b.positions && a.groupPositions == b.groupPositions
+            && a.sharing == b.sharing && a.groupSharing == b.groupSharing && a.airtime == b.airtime && a.power == b.power
             && a.syncedVersion == b.syncedVersion && a.missedSince == b.missedSince
     }
 
@@ -106,11 +135,17 @@ public struct Records: Equatable, Sendable {
             syncing?.contacts.insert(c.address)
         case let .contactGone(address):
             contacts[address] = nil
+            // The node holds no position from an address that is not a contact, and shares with
+            // none.
+            positions[address] = nil
+            sharing[address] = nil
         case let .group(g):
             groups[g.group] = g
             syncing?.groups.insert(g.group)
         case let .groupGone(group):
             groups[group] = nil
+            groupPositions = groupPositions.filter { $0.key.group != group }
+            groupSharing[group] = nil
         case let .message(m):
             items[m.id] = .message(m)
         case let .groupMessage(m):
@@ -124,6 +159,19 @@ public struct Records: Equatable, Sendable {
             syncing?.neighbours.insert(n.routingId)
         case let .neighbourGone(routingId):
             neighbours[routingId] = nil
+        case let .position(contact, p):
+            positions[contact] = p.precision == 0 ? nil : p
+            if p.precision != 0 { syncing?.positions.insert(contact) }
+        case let .groupPosition(group, from, p):
+            let member = GroupMember(group: group, from: from)
+            groupPositions[member] = p.precision == 0 ? nil : p
+            if p.precision != 0 { syncing?.groupPositions.insert(member) }
+        case let .sharing(contact, s):
+            sharing[contact] = s.isOn ? s : nil
+            if s.isOn { syncing?.sharing.insert(contact) }
+        case let .groupSharing(group, s):
+            groupSharing[group] = s.isOn ? s : nil
+            if s.isOn { syncing?.groupSharing.insert(group) }
         case let .airtime(a):
             airtime = a
         case let .power(p):
@@ -152,17 +200,24 @@ public struct Records: Equatable, Sendable {
     }
 
     mutating func beginSync() {
-        syncing = ([], [], [])
+        syncing = Seen()
     }
 
-    /// `SYNCED`: whatever of the three whole lists the sync did not send is gone. Returns false,
-    /// and changes nothing, for a sync abandoned on the way.
+    /// `SYNCED`: whatever of the whole lists the sync did not send is gone, and sharing it did not
+    /// send is off. Returns false, and changes nothing, for a sync abandoned on the way.
     mutating func finishSync(version: UInt8) -> Bool {
         guard let seen = syncing else { return false }
         contacts = contacts.filter { seen.contacts.contains($0.key) }
         // A sync of version 1 or earlier sends no groups: it says nothing of whether they are gone.
         if version >= 2 { groups = groups.filter { seen.groups.contains($0.key) } }
         neighbours = neighbours.filter { seen.neighbours.contains($0.key) }
+        // Nor does one of version 4 or earlier send positions or sharing.
+        if version >= 5 {
+            positions = positions.filter { seen.positions.contains($0.key) }
+            groupPositions = groupPositions.filter { seen.groupPositions.contains($0.key) }
+            sharing = sharing.filter { seen.sharing.contains($0.key) }
+            groupSharing = groupSharing.filter { seen.groupSharing.contains($0.key) }
+        }
         syncedVersion = version
         missedSince = nil
         syncing = nil

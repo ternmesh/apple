@@ -23,7 +23,7 @@ final class CompanionVectorTests: XCTestCase {
 
     func testFramesBuiltReadWrappedAndFound() throws {
         let cases = v["frames"]!.array
-        XCTAssertGreaterThanOrEqual(cases.count, 53)
+        XCTAssertGreaterThanOrEqual(cases.count, 66)
         for c in cases {
             let name = c["type"]!.string
             let frame = Frame(seq: UInt8(c["seq"]!.int), body: try body(name, c["fields"]!.object))
@@ -108,7 +108,8 @@ final class CompanionVectorTests: XCTestCase {
             let version = UInt8(c["version"]!.int)
             for f in c["frames"]!.array {
                 let name = f["type"]!.string
-                // Version 1's client ends with a request its version does not define.
+                // The clients of versions 1, 3 and 4 end with a request their version does not
+                // define.
                 if let latest = try? Frame.decode(f["frame"]!.bytes), latest.body.since > version {
                     XCTAssertThrowsError(try Frame.decode(f["frame"]!.bytes, version: version), name)
                     continue
@@ -118,9 +119,66 @@ final class CompanionVectorTests: XCTestCase {
                 XCTAssertEqual(Hex.encode(try frame.encode()), f["frame"]!.string, "\(version) \(name)")
             }
         }
-        // And by version 3, version 2's SYNCED is cut short.
+        // And by the latest version, version 2's SYNCED is cut short, and version 3's INFO.
         XCTAssertThrowsError(try Frame.decode([0x43, 0x02]))
         XCTAssertEqual(try Frame.decode([0x43, 0x02], version: 2).body, .synced(news: nil))
+        let info3 = Hex.decode("420104147465726e20302e322e302068656c7465632d7633")!
+        XCTAssertThrowsError(try Frame.decode(info3))
+        // A node of version 3's INFO, read by a client of the latest version, is the version 3 it says.
+        XCTAssertEqual(
+            try Frame.decode(Hex.decode("420103047465726e")!).body,
+            .info(version: 3, firmware: "tern", board: nil, release: nil))
+        XCTAssertEqual(
+            try Frame.decode(info3, version: 3).body,
+            .info(version: 4, firmware: "tern 0.2.0 heltec-v3", board: nil, release: nil))
+    }
+
+    /// Speaking `version`, a frame of a type only a later version defines is of a type this one
+    /// does not: a node answers a request `ERROR` with the code given, and a client ignores news
+    /// and discards an answer, whose code is null.
+    func testUnknownToOlder() throws {
+        let cases = v["unknown_to_older"]!.array
+        XCTAssertGreaterThanOrEqual(cases.count, 11)
+        for c in cases {
+            let name = c["type"]!.string
+            let version = UInt8(c["version"]!.int)
+            let bytes = c["frame"]!.bytes
+            // The latest version reads it, as what it is.
+            XCTAssertEqual(try Frame.decode(bytes).body.name, name)
+            XCTAssertGreaterThan(Companion.since(type: bytes[0]), version, name)
+            XCTAssertThrowsError(try Frame.decode(bytes, version: version), name) { error in
+                XCTAssertEqual(error as? DecodeError, .undefined, name)
+                let answer: UInt8? = if case .null = c["answer"]! { nil } else { UInt8(c["answer"]!.int) }
+                XCTAssertEqual(Frame.errorCode(for: bytes, .undefined), answer, name)
+            }
+            XCTAssertEqual(c["why"]!.string, "a type this version does not define", name)
+
+            // A connection speaking that version, to a node of the latest, ignores the news but
+            // counts it, and discards the answer even with the seq of its request: its sync
+            // finishes, with nothing missed.
+            let c = Connection(version: version, now: { 0 }, wallTime: nil)
+            var events: [ConnectionEvent] = []
+            var sent: [[UInt8]] = []
+            c.send = { sent.append($0) }
+            c.onEvent = { events.append($0) }
+            c.open()
+            let info = Body.info(version: Companion.version, firmware: "t", board: "b", release: "1")
+            c.receive(try Frame(seq: sent.removeFirst()[1], body: info).encode())
+            let sync = try Frame.decode(sent.removeFirst())
+            guard case .sync = sync.body else { return XCTFail(name) }
+            for n: UInt8 in 0..<5 { c.receive([0xBF, n]) }
+            events.removeAll()
+            var frame = bytes
+            if frame[0].isAnswerType { frame[1] = sync.seq }
+            c.receive(frame)
+            XCTAssertEqual(events, [], name)
+            XCTAssertEqual(c.records.me, nil, name)
+            let count: UInt8 = frame[0].isNewsType ? 6 : 5
+            c.receive(try Frame(seq: sync.seq, body: .synced(news: version >= 3 ? count : nil)).encode())
+            XCTAssertEqual(events, [.synced], name)
+            XCTAssertNil(c.records.missedSince, name)
+            XCTAssertEqual(sent, [], name)
+        }
     }
 
     /// A frame of a later version than the one both ends speak is one that version does not
@@ -136,6 +194,14 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertThrowsError(try Frame.decode([0x1A, 1], version: 0)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
         XCTAssertThrowsError(try Frame.decode([0x1A, 1], version: 1)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
         XCTAssertThrowsError(try Frame.decode([0x8A, 1], version: 1)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertThrowsError(try Frame.decode([0x32, 1], version: 3)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertThrowsError(try Frame.decode([0x46, 1, 0, 0, 0, 0], version: 3)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertNoThrow(try Frame.decode([0x32, 1], version: 4))
+        for type: UInt8 in [0x33, 0x34, 0x35, 0x8E, 0x8F, 0x90, 0x91] {
+            XCTAssertEqual(Companion.since(type: type), 5)
+            XCTAssertThrowsError(try Frame.decode([type, 1], version: 4)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+            XCTAssertThrowsError(try Frame.decode([type, 1], version: 5)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
+        }
     }
 
     func testAFrameThatNeverFinishesIsGivenUpAsText() {
@@ -153,6 +219,9 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertThrowsError(try Frame(seq: 1, body: .send(ref: 1, to: bob, text: String(repeating: "x", count: 129))).encode())
         XCTAssertThrowsError(try Frame(seq: 1, body: .saveContact(address: bob, name: String(repeating: "é", count: 16))).encode())
         XCTAssertNoThrow(try Frame(seq: 1, body: .send(ref: 1, to: bob, text: String(repeating: "x", count: 128))).encode())
+        let chunk = [UInt8](repeating: 7, count: Companion.updateChunk)
+        XCTAssertLessThanOrEqual(try Frame(seq: 1, body: .updateData(offset: 0, data: chunk)).encode().count, Companion.maxFrame)
+        XCTAssertThrowsError(try Frame(seq: 1, body: .updateData(offset: 0, data: chunk + [7])).encode())
     }
 
     // MARK: The vectors' fields, by name, as the codec's types.
@@ -161,10 +230,20 @@ final class CompanionVectorTests: XCTestCase {
         func u8(_ k: String) -> UInt8 { UInt8(f[k]!.int) }
         func i8(_ k: String) -> Int8 { Int8(f[k]!.int) }
         func u16(_ k: String) -> UInt16 { UInt16(f[k]!.int) }
+        func i16(_ k: String) -> Int16 { Int16(f[k]!.int) }
         func u32(_ k: String) -> UInt32 { UInt32(f[k]!.int) }
+        func i32(_ k: String) -> Int32 { Int32(f[k]!.int) }
         func str(_ k: String) -> String { f[k]!.string }
         func addr(_ k: String) -> Address { Address(f[k]!.bytes)! }
         func gid(_ k: String) -> GroupID { GroupID(f[k]!.bytes)! }
+        func sharing() -> PositionSharing {
+            PositionSharing(precision: u8("precision"), fields: u8("fields"), interval: u16("interval"), minutes: u16("minutes"))
+        }
+        func position() -> Position {
+            Position(
+                precision: u8("precision"), lat: i32("lat"), lon: i32("lon"), altitude: i16("altitude"),
+                accuracy: u8("accuracy"), age: u32("age"))
+        }
         switch name {
         case "HELLO": return .hello(version: u8("version"))
         case "SYNC": return .sync(after: u32("after"))
@@ -191,10 +270,20 @@ final class CompanionVectorTests: XCTestCase {
         case "JOIN": return .join(id: u32("id"))
         case "OK": return .ok
         case "ERROR": return .error(code: u8("code"))
-        case "INFO": return .info(version: u8("version"), firmware: str("firmware"))
+        case "INFO":
+            return .info(version: u8("version"), firmware: str("firmware"), board: f["board"]?.string, release: f["release"]?.string)
         case "SYNCED": return .synced(news: f["news"].map { UInt8($0.int) })
         case "QUEUED": return .queued(id: u32("id"))
         case "MADE": return .made(group: gid("group"))
+        case "UPDATE_BEGIN": return .updateBegin(size: u32("size"), digest: Digest(f["digest"]!.bytes)!)
+        case "UPDATE_DATA": return .updateData(offset: u32("offset"), data: f["data"]!.bytes)
+        case "UPDATE_END": return .updateEnd
+        case "UPDATING": return .updating(offset: u32("offset"))
+        case "SET_POSITION":
+            return .setPosition(
+                lat: i32("lat"), lon: i32("lon"), altitude: i16("altitude"), accuracy: u16("accuracy"), age: u16("age"))
+        case "SHARE": return .share(contact: addr("contact"), sharing())
+        case "SHARE_GROUP": return .shareGroup(group: gid("group"), sharing())
         case "SELF":
             return .nodeSelf(NodeSelf(
                 address: addr("address"), role: u8("role"), region: str("region"), power: i8("power"), time: u32("time")))
@@ -223,6 +312,10 @@ final class CompanionVectorTests: XCTestCase {
             return .invite(Invite(
                 id: u32("id"), contact: addr("contact"), group: gid("group"), time: u32("time"), flags: u8("flags"),
                 state: u8("state"), reason: u8("reason"), wait: u16("wait"), name: str("name")))
+        case "POSITION": return .position(contact: addr("contact"), position())
+        case "GROUP_POSITION": return .groupPosition(group: gid("group"), from: u32("from"), position())
+        case "SHARING": return .sharing(contact: addr("contact"), sharing())
+        case "GROUP_SHARING": return .groupSharing(group: gid("group"), sharing())
         default: throw DecodeError.undefined
         }
     }

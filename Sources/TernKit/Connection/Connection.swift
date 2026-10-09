@@ -49,6 +49,11 @@ public final class Connection {
     /// The node's version and firmware, from its `INFO`.
     public private(set) var nodeVersion: UInt8?
     public private(set) var firmware: String?
+    /// The hardware the node's firmware is built for, and that firmware's release, from an `INFO`
+    /// of version 4 or later: nil before, and empty if the node has none to give. An empty `board`
+    /// is a node that cannot be updated over this protocol.
+    public private(set) var board: String?
+    public private(set) var release: String?
 
     /// Sends one frame to the node: one Bluetooth write, or wrapped for a byte stream.
     public var send: ([UInt8]) -> Void = { _ in }
@@ -113,6 +118,8 @@ public final class Connection {
         phase = .greeting
         nodeVersion = nil
         firmware = nil
+        board = nil
+        release = nil
         hello()
         for p in old { p.then(.failure(.closed)) }
     }
@@ -231,9 +238,11 @@ public final class Connection {
         inFlight = nil
         lastAnswer = now()
         switch (p.kind, body) {
-        case let (.hello, .info(v, fw)):
+        case let (.hello, .info(v, fw, b, rel)):
             nodeVersion = v
             firmware = fw
+            board = b
+            release = rel
             phase = .open
             expectedNews = 0
             // A connection that starts has missed whatever changed while there was none.

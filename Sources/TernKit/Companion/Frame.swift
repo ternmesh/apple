@@ -1,19 +1,25 @@
-// The companion protocol's frames, version 3: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 5: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 2 is this without `SYNCED`'s `news`, version 1
-    /// is version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 3
+    /// The version this client speaks. Version 4 is this without positions (the requests `0x33`
+    /// to `0x35`, error 12, and the news `POSITION`, `GROUP_POSITION`, `SHARING` and
+    /// `GROUP_SHARING`), version 3 is version 4 without updates (the requests `0x30` to `0x32`,
+    /// `UPDATING`, errors 10 and 11, and `INFO`'s `board` and `release`), version 2 is version 3
+    /// without `SYNCED`'s `news`, version 1 is version 2 without groups, and version 0 is version
+    /// 1 without `END_SESSION` and `ASKED`.
+    public static let version: UInt8 = 5
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
         switch type {
         case 0x1A, 0x89: 1
         case 0x20...0x25, 0x45, 0x8A...0x8D: 2
+        case 0x30...0x32, 0x46: 4
+        case 0x33...0x35, 0x8E...0x91: 5
         default: 0
         }
     }
@@ -22,6 +28,13 @@ public enum Companion {
     public static let nameMax = 31
     public static let regionMax = 15
     public static let firmwareMax = 31
+    /// `INFO`'s `board` and `release`.
+    public static let boardMax = 31
+    public static let releaseMax = 31
+    /// The finest precision a position is shared at: a cell of `360 / 2^24` degrees.
+    public static let precisionMax: UInt8 = 24
+    /// The longest `data` an `UPDATE_DATA` carries, and what a client sends in all but the last.
+    public static let updateChunk = 172
     /// How long a client waits for an answer, in seconds.
     public static let answerWait = 5.0
     /// The longest a client goes without a request, in seconds.
@@ -81,6 +94,24 @@ public struct GroupID: Hashable, Sendable, CustomStringConvertible {
     public var description: String { Hex.encode(bytes) }
 }
 
+/// A SHA-256 digest, as `UPDATE_BEGIN` carries an image's.
+public struct Digest: Hashable, Sendable, CustomStringConvertible {
+    public static let length = 32
+    public let bytes: [UInt8]
+
+    public init?(_ bytes: [UInt8]) {
+        guard bytes.count == Digest.length else { return nil }
+        self.bytes = bytes
+    }
+
+    public init?(hex: String) {
+        guard let bytes = Hex.decode(hex) else { return nil }
+        self.init(bytes)
+    }
+
+    public var description: String { Hex.encode(bytes) }
+}
+
 /// An `ERROR`'s code. A code this client does not know is a refusal all the same.
 public enum ErrorCode {
     /// A request, or a setting, the node's version does not define.
@@ -90,7 +121,8 @@ public enum ErrorCode {
     public static let refused: UInt8 = 3
     /// Not a valid address, or the node's own.
     public static let badAddress: UInt8 = 4
-    /// The node cannot hold another contact, message or group.
+    /// The node cannot hold another contact, message or group, or the image an update offers. A
+    /// node whose `board` is empty answers `UPDATE_BEGIN` with it.
     public static let noRoom: UInt8 = 5
     /// `HELLO` first: on a connection that had one, the node has taken the client for gone.
     public static let helloFirst: UInt8 = 6
@@ -100,6 +132,13 @@ public enum ErrorCode {
     public static let notNow: UInt8 = 8
     /// A group the node is not in, or an invite it does not hold.
     public static let notHeld: UInt8 = 9
+    /// Not where the update is: none is under way, or not at that offset. `UPDATE_BEGIN` again
+    /// says where to go on from.
+    public static let notThere: UInt8 = 10
+    /// Not an image this node runs, or its digest is wrong: the update is discarded.
+    public static let notAnImage: UInt8 = 11
+    /// Not a contact: `SHARE` to an address the node does not hold as one.
+    public static let notAContact: UInt8 = 12
 }
 
 /// A frame: its sequence number and what it says. The type byte follows from the body.
@@ -339,7 +378,66 @@ public struct Power: Equatable, Sendable {
     }
 }
 
-/// What a frame says: every frame of version 3.
+/// `POSITION` and `GROUP_POSITION`: a position the node holds from a contact, or from a routing
+/// id in a group, as the centre of its cell.
+public struct Position: Equatable, Sendable {
+    /// The cell is `360 / 2^precision` degrees each way. 0 in a record that says the node holds
+    /// no position from that sender, whose other fields are then 0.
+    public var precision: UInt8
+    /// The cell's centre, in 10^-7 degree, north and east positive.
+    public var lat: Int32
+    public var lon: Int32
+    /// Metres, or `Position.noAltitude`.
+    public var altitude: Int16
+    /// Metres; 0 if the position gave none.
+    public var accuracy: UInt8
+    /// How many seconds old the fix was, as of the record.
+    public var age: UInt32
+
+    public init(precision: UInt8, lat: Int32, lon: Int32, altitude: Int16, accuracy: UInt8, age: UInt32) {
+        self.precision = precision
+        self.lat = lat
+        self.lon = lon
+        self.altitude = altitude
+        self.accuracy = accuracy
+        self.age = age
+    }
+
+    /// An `altitude` that says there is none.
+    public static let noAltitude = Int16.min
+    /// The record that says the node holds no position from that sender.
+    public static let notHeld = Position(precision: 0, lat: 0, lon: 0, altitude: 0, accuracy: 0, age: 0)
+}
+
+/// How the node shares its position with a contact or a group: what `SHARE` and `SHARE_GROUP`
+/// ask for, and `SHARING` and `GROUP_SHARING` say. Not `Sharing`, which shares an address.
+public struct PositionSharing: Equatable, Sendable {
+    /// 1 to 24, or 0 for off, when the other fields are 0.
+    public var precision: UInt8
+    /// Bit 0: altitude goes with each position. Bit 1: accuracy does.
+    public var fields: UInt8
+    /// Seconds between positions.
+    public var interval: UInt16
+    /// In news, the minutes left until the node turns sharing off, rounded up; in a request, how
+    /// long it lasts from now. 0 for until it is turned off.
+    public var minutes: UInt16
+
+    public init(precision: UInt8, fields: UInt8, interval: UInt16, minutes: UInt16) {
+        self.precision = precision
+        self.fields = fields
+        self.interval = interval
+        self.minutes = minutes
+    }
+
+    public static let altitude: UInt8 = 1
+    public static let accuracy: UInt8 = 2
+    /// Sharing turned off, or asked off.
+    public static let off = PositionSharing(precision: 0, fields: 0, interval: 0, minutes: 0)
+
+    public var isOn: Bool { precision != 0 }
+}
+
+/// What a frame says: every frame of version 5.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -358,16 +456,34 @@ public enum Body: Equatable, Sendable {
     case sendGroup(ref: UInt32, group: GroupID, text: String)
     case sendInvite(group: GroupID, to: Address)
     case join(id: UInt32)
+    /// An image of `size` bytes, whose SHA-256 is `digest`, follows.
+    case updateBegin(size: UInt32, digest: Digest)
+    /// The image's bytes from `offset`: `Companion.updateChunk` of them, all but the last.
+    case updateData(offset: UInt32, data: [UInt8])
+    /// Run the image. Never sent again once given up on: the node may be restarting into it.
+    case updateEnd
+    /// The client's position: `lat` and `lon` in 10^-7 degree, WGS 84; `altitude` in metres, or
+    /// `Position.noAltitude`; `accuracy` in metres, 0 for none; `age` in seconds.
+    case setPosition(lat: Int32, lon: Int32, altitude: Int16, accuracy: UInt16, age: UInt16)
+    /// Sharing with a contact turned on, changed, or with `PositionSharing.off`, turned off. Only
+    /// ever at the user's asking.
+    case share(contact: Address, PositionSharing)
+    case shareGroup(group: GroupID, PositionSharing)
 
     // Answers, sent by the node with the request's seq.
     case ok
     case error(code: UInt8)
-    case info(version: UInt8, firmware: String)
+    /// `board` and `release` are nil from a node, or to a client, of version 3 or earlier, whose
+    /// `INFO` has neither. `board` is empty if the node cannot be updated over this protocol, and
+    /// `release` if its firmware has no version, as a build made by hand may not.
+    case info(version: UInt8, firmware: String, board: String?, release: String?)
     /// The sync is done. `news` is the node's count as it answers, the `seq` of its next news
     /// frame; nil from a node of version 2 or earlier, whose `SYNCED` has no fields.
     case synced(news: UInt8?)
     case queued(id: UInt32)
     case made(group: GroupID)
+    /// The offset an update goes on from.
+    case updating(offset: UInt32)
 
     // News, sent by the node with its count as seq.
     case nodeSelf(NodeSelf)
@@ -386,6 +502,13 @@ public enum Body: Equatable, Sendable {
     case groupGone(group: GroupID)
     case groupMessage(GroupMessage)
     case invite(Invite)
+    /// The position the node holds from `contact`; `Position.notHeld` once it holds none.
+    case position(contact: Address, Position)
+    /// The position the node holds from the routing id `from` in a group: what a member claimed.
+    case groupPosition(group: GroupID, from: UInt32, Position)
+    /// How the node shares its position with `contact`; `PositionSharing.off` once it does not.
+    case sharing(contact: Address, PositionSharing)
+    case groupSharing(group: GroupID, PositionSharing)
 
     /// The type byte.
     public var type: UInt8 {
@@ -406,12 +529,19 @@ public enum Body: Equatable, Sendable {
         case .sendGroup: 0x23
         case .sendInvite: 0x24
         case .join: 0x25
+        case .updateBegin: 0x30
+        case .updateData: 0x31
+        case .updateEnd: 0x32
+        case .setPosition: 0x33
+        case .share: 0x34
+        case .shareGroup: 0x35
         case .ok: 0x40
         case .error: 0x41
         case .info: 0x42
         case .synced: 0x43
         case .queued: 0x44
         case .made: 0x45
+        case .updating: 0x46
         case .nodeSelf: 0x80
         case .contact: 0x81
         case .contactGone: 0x82
@@ -426,6 +556,10 @@ public enum Body: Equatable, Sendable {
         case .groupGone: 0x8B
         case .groupMessage: 0x8C
         case .invite: 0x8D
+        case .position: 0x8E
+        case .groupPosition: 0x8F
+        case .sharing: 0x90
+        case .groupSharing: 0x91
         }
     }
 
@@ -448,12 +582,19 @@ public enum Body: Equatable, Sendable {
         case .sendGroup: "SEND_GROUP"
         case .sendInvite: "SEND_INVITE"
         case .join: "JOIN"
+        case .updateBegin: "UPDATE_BEGIN"
+        case .updateData: "UPDATE_DATA"
+        case .updateEnd: "UPDATE_END"
+        case .setPosition: "SET_POSITION"
+        case .share: "SHARE"
+        case .shareGroup: "SHARE_GROUP"
         case .ok: "OK"
         case .error: "ERROR"
         case .info: "INFO"
         case .synced: "SYNCED"
         case .queued: "QUEUED"
         case .made: "MADE"
+        case .updating: "UPDATING"
         case .nodeSelf: "SELF"
         case .contact: "CONTACT"
         case .contactGone: "CONTACT_GONE"
@@ -468,6 +609,10 @@ public enum Body: Equatable, Sendable {
         case .groupGone: "GROUP_GONE"
         case .groupMessage: "GROUP_MESSAGE"
         case .invite: "INVITE"
+        case .position: "POSITION"
+        case .groupPosition: "GROUP_POSITION"
+        case .sharing: "SHARING"
+        case .groupSharing: "GROUP_SHARING"
         }
     }
 }

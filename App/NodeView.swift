@@ -1,5 +1,6 @@
-// The node itself: its address, as a QR code, a link and the short code; its battery and airtime, the neighbours it hears, and its
-// settings. A setting changed here is shown once the node's SELF says so, not before.
+// The node itself: its address, as a QR code, a link and the short code; its battery and airtime,
+// the neighbours it hears, its settings, and its firmware. A setting changed here is shown once the
+// node's SELF says so, not before.
 
 import SwiftUI
 import TernKit
@@ -8,6 +9,7 @@ struct NodeView: View {
     @EnvironmentObject private var model: NodeModel
     @State private var power = 0
     @State private var passkey = ""
+    @State private var confirmingUpdate: FirmwareOffer?
 
     /// The profiles a node is set to by name. A node refuses one it does not have.
     private static let regions = ["US915", "EU868"]
@@ -26,12 +28,23 @@ struct NodeView: View {
                         .foregroundStyle(.secondary)
                 }
                 software
+                firmwareUpdate
             }
             .formStyle(.grouped)
             .navigationTitle(model.nodeName ?? "Node")
             .onAppear { power = Int(model.records.me?.power ?? 0) }
             .onChange(of: model.records.me?.power) { p in power = Int(p ?? 0) }
             .showsProblems()
+            .confirmationDialog(
+                confirmingUpdate.map { "Update the node to \($0.release)?" } ?? "",
+                isPresented: Binding(get: { confirmingUpdate != nil }, set: { if !$0 { confirmingUpdate = nil } }),
+                titleVisibility: .visible
+            ) {
+                Button("Update") { model.update() }
+                Button("Not Now", role: .cancel) {}
+            } message: {
+                Text("It takes a few minutes. Keep the node near this device. If the link drops, the update goes on when the node is back. At the end the node restarts, and keeps its contacts, messages and settings.")
+            }
         }
     }
 
@@ -104,6 +117,8 @@ struct NodeView: View {
                 }
                 ForEach(Self.regions, id: \.self) { Text($0).tag($0) }
             }
+            // An image is for one region, and a new region restarts the node: not while one is on its way.
+            .disabled(model.firmwareStatus.isTransferring)
             Picker("Role", selection: Binding(get: { me.role }, set: { model.set(.role($0)) })) {
                 Text("Leaf").tag(UInt8(0))
                 Text("Relay").tag(UInt8(1))
@@ -168,7 +183,111 @@ struct NodeView: View {
         }
     }
 
+    /// The node's release and board, and an update to the site's latest release.
+    @ViewBuilder
+    private var firmwareUpdate: some View {
+        if model.firmware != nil {
+            SwiftUI.Section {
+                if let release = model.release {
+                    LabeledContent("Release", value: release.isEmpty ? "None: built by hand" : release)
+                }
+                if let board = model.board, !board.isEmpty {
+                    LabeledContent("Board", value: board)
+                }
+                if let board = model.board {
+                    if board.isEmpty {
+                        Text("This node can't be updated over Bluetooth. Flash it once over USB, and the app can update it from then on.")
+                            .foregroundStyle(.secondary)
+                        flashLink
+                    } else {
+                        updateStatus
+                    }
+                } else {
+                    Text("This node's firmware is too old to be updated from the app.")
+                        .foregroundStyle(.secondary)
+                    flashLink
+                }
+            } header: {
+                Text("Firmware")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var updateStatus: some View {
+        switch model.firmwareStatus {
+        case .idle:
+            Button("Check for Update") { model.checkForUpdate() }
+                .disabled(!model.isReady)
+        case .checking:
+            HStack {
+                ProgressView()
+                Text("Checking ternmesh.org…").foregroundStyle(.secondary)
+            }
+        case let .found(offer):
+            switch offer.comparison {
+            case .newer:
+                LabeledContent("Available", value: offer.release)
+                Button("Update to \(offer.release)…") { confirmingUpdate = offer }
+                    .disabled(!model.isReady)
+            case .unknown:
+                Text("Release \(offer.release) is available. The node does not say which release it runs, so the app cannot tell whether it is newer.")
+                    .foregroundStyle(.secondary)
+                Button("Install \(offer.release)…") { confirmingUpdate = offer }
+                    .disabled(!model.isReady)
+            case .same:
+                Text("Up to date: \(offer.release) is the latest release.").foregroundStyle(.secondary)
+                Button("Check Again") { model.checkForUpdate() }
+            case .older:
+                Text("The node runs a newer release than the latest, \(offer.release).").foregroundStyle(.secondary)
+                Button("Check Again") { model.checkForUpdate() }
+            }
+        case let .nothing(why):
+            Text(why).foregroundStyle(.secondary)
+            Button("Check Again") { model.checkForUpdate() }
+        case let .downloading(offer):
+            HStack {
+                ProgressView()
+                Text("Downloading \(offer.release)…").foregroundStyle(.secondary)
+            }
+            Button("Cancel", role: .destructive) { model.cancelUpdate() }
+                .buttonStyle(.borderless)
+        case let .sending(offer, held, size, waiting, canCancel):
+            ProgressView(value: Double(held), total: Double(max(size, 1))) {
+                Text("Sending \(offer.release)")
+            } currentValueLabel: {
+                Text(waiting ? "Waiting for the node to come back…" : "\(held * 100 / max(size, 1))%, \(kilobytes(held)) of \(kilobytes(size))")
+            }
+            if canCancel {
+                Button("Cancel", role: .destructive) { model.cancelUpdate() }
+                    .buttonStyle(.borderless)
+            }
+        case let .restarting(offer, confirmed):
+            HStack {
+                ProgressView()
+                Text(confirmed ? "The node is restarting into \(offer.release)…" : Words.update(.unconfirmed))
+                    .foregroundStyle(.secondary)
+            }
+        case let .done(result):
+            Text(result)
+            Button("Check for Update") { model.checkForUpdate() }
+                .disabled(!model.isReady)
+        case let .failed(why):
+            Text(why).foregroundStyle(.secondary)
+            Button("Try Again") { model.checkForUpdate() }
+                .disabled(!model.isReady)
+        }
+    }
+
+    private var flashLink: some View {
+        Link("Flash over USB at ternmesh.org/flash", destination: URL(string: "https://ternmesh.org/flash")!)
+    }
+
     // MARK: Units
+
+    private func kilobytes(_ bytes: Int) -> String {
+        "\((bytes + 512) / 1024) KB"
+    }
 
     private func volts(_ millivolts: UInt16) -> String {
         "\(millivolts / 1000).\(String(format: "%02d", Int(millivolts % 1000) / 10)) V"
