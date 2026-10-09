@@ -30,6 +30,14 @@ struct Outgoing: Identifiable, Equatable {
     var after: UInt32 = 0
 }
 
+/// A node the app has connected to and keeps records of.
+struct KnownNode: Identifiable, Equatable {
+    var id: UUID
+    var name: String
+    /// When the user last chose it.
+    var chosen: Date
+}
+
 /// Someone not in the contacts tried to reach the node, and was refused.
 struct Asked: Identifiable, Equatable {
     var id: Address { address }
@@ -43,6 +51,10 @@ final class NodeModel: ObservableObject {
     @Published private(set) var linkState: BluetoothLink.State = .starting
     @Published private(set) var found: [FoundNode] = []
     @Published private(set) var remembered: UUID?
+    /// The user disconnected from the remembered node, and the app stays off it until they connect.
+    @Published private(set) var disconnected = false
+    /// Every node the app keeps records of, most recently chosen first.
+    @Published private(set) var known: [KnownNode] = []
     @Published private(set) var nodeName: String?
     @Published private(set) var records = Records()
     @Published private(set) var conversations: [Conversation] = []
@@ -84,11 +96,19 @@ final class NodeModel: ObservableObject {
     /// send made now matches only records past it: one the node queues for it is given a greater id.
     private var queuedFloor: UInt32 = 0
     private static let nameKey = "org.ternmesh.tern.nodeName"
+    private static let knownKey = "org.ternmesh.tern.known"
 
     init() {
         link = BluetoothLink()
         remembered = link.remembered
+        disconnected = link.isDisconnected
         nodeName = UserDefaults.standard.string(forKey: Self.nameKey)
+        known = Self.loadKnown()
+        // A node chosen before the app kept a list of them.
+        if let id = remembered, !known.contains(where: { $0.id == id }) {
+            known.insert(KnownNode(id: id, name: nodeName ?? "Tern node", chosen: Date()), at: 0)
+            keepKnown()
+        }
         if let id = link.remembered {
             records = Self.load(id)
             outgoing = Self.loadOutgoing(id)
@@ -113,38 +133,60 @@ final class NodeModel: ObservableObject {
     func startScanning() { link.startScanning() }
     func stopScanning() { link.stopScanning() }
 
-    func connect(to node: FoundNode) {
-        if remembered != node.id {
+    func connect(to node: FoundNode) { connect(to: node.id, name: node.name) }
+
+    /// Makes the node `id` the app's node and connects to it. The records of the node before it
+    /// stay on disk, for when it is chosen again.
+    func connect(to id: UUID, name: String) {
+        if remembered != id {
             save()
             // The node first: what is set below is kept on disk under it.
-            remembered = node.id
-            records = Self.load(node.id)
+            remembered = id
+            records = Self.load(id)
             conversations = records.conversations
-            outgoing = Self.loadOutgoing(node.id)
-            asked = Self.loadAsked(node.id)
+            outgoing = Self.loadOutgoing(id)
+            asked = Self.loadAsked(id)
             seen = [:]
             queuedFloor = 0
+            firmware = nil
+            nodeVersion = nil
+            agreed = nil
         }
-        remembered = node.id
-        nodeName = node.name
-        UserDefaults.standard.set(node.name, forKey: Self.nameKey)
-        link.connect(to: node.id)
+        remembered = id
+        nodeName = name
+        UserDefaults.standard.set(name, forKey: Self.nameKey)
+        known.removeAll { $0.id == id }
+        known.insert(KnownNode(id: id, name: name, chosen: Date()), at: 0)
+        keepKnown()
+        link.connect(to: id)
+        disconnected = link.isDisconnected
     }
 
-    func retry() { link.retry() }
+    /// Tries again after a failure, or connects again after the user disconnected.
+    func retry() {
+        link.retry()
+        disconnected = link.isDisconnected
+    }
 
-    /// Forgets the node, and what the app kept of it.
-    func forget() {
+    /// Drops the link and stays off the node until the user connects again. The node and what the
+    /// app kept of it stay: connecting again syncs only what is new.
+    func disconnect() {
+        link.disconnect()
+        disconnected = link.isDisconnected
+        save()
+    }
+
+    /// Forgets the node `id`, and deletes what the app kept of it. Its messages stay on the node.
+    func forget(_ id: UUID) {
+        known.removeAll { $0.id == id }
+        keepKnown()
+        guard id == remembered else { return Self.remove(id) }
         // The node goes first: closing the link settles sends in flight, and with no node they
         // are not written back under it.
-        let id = remembered
         remembered = nil
         link.forget()
-        if let id {
-            try? FileManager.default.removeItem(at: Self.file(id))
-            UserDefaults.standard.removeObject(forKey: Self.outgoingKey(id))
-            UserDefaults.standard.removeObject(forKey: Self.askedKey(id))
-        }
+        disconnected = link.isDisconnected
+        Self.remove(id)
         nodeName = nil
         UserDefaults.standard.removeObject(forKey: Self.nameKey)
         records = Records()
@@ -366,6 +408,30 @@ final class NodeModel: ObservableObject {
     }
 
     // MARK: On disk
+
+    /// Deletes what the app kept of the node `id`.
+    private static func remove(_ id: UUID) {
+        try? FileManager.default.removeItem(at: file(id))
+        UserDefaults.standard.removeObject(forKey: outgoingKey(id))
+        UserDefaults.standard.removeObject(forKey: askedKey(id))
+    }
+
+    private func keepKnown() {
+        let kept = known.map { k -> [String: String] in
+            ["id": k.id.uuidString, "name": k.name, "chosen": String(k.chosen.timeIntervalSince1970)]
+        }
+        UserDefaults.standard.set(kept, forKey: Self.knownKey)
+    }
+
+    private static func loadKnown() -> [KnownNode] {
+        let kept = UserDefaults.standard.array(forKey: knownKey) as? [[String: String]] ?? []
+        return kept.compactMap { d in
+            guard let id = d["id"].flatMap(UUID.init(uuidString:)), let name = d["name"] else { return nil }
+            let chosen = d["chosen"].flatMap(Double.init).map(Date.init(timeIntervalSince1970:)) ?? .distantPast
+            return KnownNode(id: id, name: name, chosen: chosen)
+        }
+        .sorted { $0.chosen > $1.chosen }
+    }
 
     private static func file(_ id: UUID) -> URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

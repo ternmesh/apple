@@ -29,6 +29,8 @@ public final class BluetoothLink: NSObject {
         case poweredOff
         /// No node chosen, and not looking for one.
         case idle
+        /// The user disconnected from the remembered node: nothing connects until they connect again.
+        case disconnected
         case scanning
         /// Waiting to connect to the chosen node: iOS keeps the request until it is in range.
         case connecting
@@ -75,6 +77,9 @@ public final class BluetoothLink: NSObject {
     /// The connection to the remembered node, once the link has been opened to it. Kept across
     /// reconnects, so the records in it are kept too.
     public private(set) var connection: Connection?
+    /// The user disconnected from the remembered node, and has not connected again. Kept across
+    /// runs, so the app does not connect by itself when it next starts.
+    public private(set) var isDisconnected = false
 
     public var onState: (State) -> Void = { _ in }
     public var onFound: ([FoundNode]) -> Void = { _ in }
@@ -86,6 +91,7 @@ public final class BluetoothLink: NSObject {
     }
 
     private static let rememberedKey = "org.ternmesh.tern.node"
+    private static let disconnectedKey = "org.ternmesh.tern.node.disconnected"
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var seen: [UUID: CBPeripheral] = [:]
@@ -100,7 +106,8 @@ public final class BluetoothLink: NSObject {
     public init(restoreIdentifier: String? = "org.ternmesh.tern.central") {
         super.init()
         remembered = UserDefaults.standard.string(forKey: Self.rememberedKey).flatMap(UUID.init(uuidString:))
-        wanted = remembered != nil
+        isDisconnected = remembered != nil && UserDefaults.standard.bool(forKey: Self.disconnectedKey)
+        wanted = remembered != nil && !isDisconnected
         var options: [String: Any] = [CBCentralManagerOptionShowPowerAlertKey: true]
         #if os(iOS)
         if let restoreIdentifier { options[CBCentralManagerOptionRestoreIdentifierKey] = restoreIdentifier }
@@ -139,14 +146,17 @@ public final class BluetoothLink: NSObject {
         }
         remembered = id
         UserDefaults.standard.set(id.uuidString, forKey: Self.rememberedKey)
+        setDisconnected(false)
         stopScanning()
         wanted = true
         reconnect()
     }
 
-    /// Tries again after a failure: pairing, the MTU or a refused `HELLO`.
+    /// Tries again after a failure (pairing, the MTU or a refused `HELLO`), or connects again after
+    /// the user disconnected.
     public func retry() {
         guard remembered != nil else { return }
+        setDisconnected(false)
         wanted = true
         if let p = peripheral, p.state == .connected || p.state == .connecting {
             // Its didDisconnect connects again.
@@ -154,6 +164,26 @@ public final class BluetoothLink: NSObject {
             state = .connecting
         } else {
             reconnect()
+        }
+    }
+
+    /// Disconnects from the remembered node and stays off it, across runs too, until `retry` or
+    /// `connect(to:)`. The node stays remembered, and so does the connection with its records:
+    /// connecting again syncs only what is new.
+    public func disconnect() {
+        guard remembered != nil else { return }
+        wanted = false
+        setDisconnected(true)
+        if let p = peripheral { drop(p) }
+        settle()
+    }
+
+    private func setDisconnected(_ off: Bool) {
+        isDisconnected = off
+        if off {
+            UserDefaults.standard.set(true, forKey: Self.disconnectedKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.disconnectedKey)
         }
     }
 
@@ -167,6 +197,7 @@ public final class BluetoothLink: NSObject {
         connection = nil
         remembered = nil
         UserDefaults.standard.removeObject(forKey: Self.rememberedKey)
+        setDisconnected(false)
         settle()
     }
 
@@ -218,7 +249,7 @@ public final class BluetoothLink: NSObject {
         case .unsupported: state = .unsupported
         case .unauthorized: state = .unauthorized
         case .poweredOff: state = .poweredOff
-        case .poweredOn: state = scanning ? .scanning : (wanted ? .connecting : .idle)
+        case .poweredOn: state = scanning ? .scanning : wanted ? .connecting : isDisconnected ? .disconnected : .idle
         default: state = .starting
         }
     }

@@ -19,6 +19,9 @@ struct ChatsView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
+                if model.disconnected {
+                    Button("Connect") { model.retry() }
+                }
                 if !model.asked.isEmpty {
                     NavigationLink {
                         AskedView()
