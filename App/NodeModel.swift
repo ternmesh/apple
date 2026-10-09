@@ -502,20 +502,27 @@ final class NodeModel: ObservableObject {
     /// as of then. Keyed "c:" and an address, "g:" a group and routing id, "sc:" and "sg:" for sharing.
     private var heard: [String: Date] = [:]
 
-    /// Notes when each position and sharing record in `new` arrived: one that changed, now.
-    private func noteArrivals(_ new: Records) {
-        var keys = Set<String>()
-        func note<K: Hashable, V: Equatable>(_ prefix: String, _ old: [K: V], _ new: [K: V], _ name: (K) -> String) {
-            for (k, v) in new {
-                let key = prefix + name(k)
-                keys.insert(key)
-                if old[k] != v || heard[key] == nil { heard[key] = Date() }
-            }
+    /// Notes that a position or sharing record arrived now: each one's `age` or `minutes` is as of
+    /// its own frame, so one the same as the record before it still sets the time anew.
+    private func noteArrival(_ body: Body) {
+        let key: String
+        switch body {
+        case let .position(contact, _): key = "c:\(contact)"
+        case let .groupPosition(group, from, _): key = "g:\(group):\(Words.routingId(from))"
+        case let .sharing(contact, _): key = "sc:\(contact)"
+        case let .groupSharing(group, _): key = "sg:\(group)"
+        default: return
         }
-        note("c:", records.positions, new.positions) { "\($0)" }
-        note("g:", records.groupPositions, new.groupPositions) { "\($0.group):\(Words.routingId($0.from))" }
-        note("sc:", records.sharing, new.sharing) { "\($0)" }
-        note("sg:", records.groupSharing, new.groupSharing) { "\($0)" }
+        heard[key] = Date()
+    }
+
+    /// Forgets the arrival of records no longer held.
+    private func forgetArrivals(_ new: Records) {
+        var keys = Set<String>()
+        keys.formUnion(new.positions.keys.map { "c:\($0)" })
+        keys.formUnion(new.groupPositions.keys.map { "g:\($0.group):\(Words.routingId($0.from))" })
+        keys.formUnion(new.sharing.keys.map { "sc:\($0)" })
+        keys.formUnion(new.groupSharing.keys.map { "sg:\($0)" })
         heard = heard.filter { keys.contains($0.key) }
         clock = Date()
     }
@@ -828,6 +835,7 @@ final class NodeModel: ObservableObject {
             } else if !isActive, records.isArrival(body) {
                 notify(body)
             }
+            noteArrival(body)
             take()
             scheduleSave()
         case .synced:
@@ -843,7 +851,7 @@ final class NodeModel: ObservableObject {
     /// Takes what the connection now holds.
     private func take() {
         guard let c = link.connection else { return }
-        noteArrivals(c.records)
+        forgetArrivals(c.records)
         records = c.records
         conversations = records.conversations
         setUp = remembered.map { isSetUp($0, self.records) } ?? true
