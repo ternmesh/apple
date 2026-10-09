@@ -1,6 +1,6 @@
 // The node itself: its address, as a QR code, a link and the short code; its battery and airtime,
-// the neighbours it hears, its settings, and its firmware. A setting changed here is shown once the
-// node's SELF says so, not before.
+// the neighbours it hears, its settings, its presence card, and its firmware. A setting changed here
+// is shown once the node's SELF says so, not before.
 
 import SwiftUI
 import TernKit
@@ -9,6 +9,8 @@ struct NodeView: View {
     @EnvironmentObject private var model: NodeModel
     @State private var power = 0
     @State private var passkey = ""
+    @State private var cardName = ""
+    @State private var confirmingCards = false
     @State private var confirmingUpdate: FirmwareOffer?
 
     /// The profiles a node is set to by name. A node refuses one it does not have.
@@ -22,6 +24,7 @@ struct NodeView: View {
                     battery
                     airtime
                     settings(me)
+                    card(me)
                     neighbours
                 } else {
                     Text(model.isConnected ? "Waiting for the node…" : "Connect to a node to see it here.")
@@ -32,8 +35,12 @@ struct NodeView: View {
             }
             .formStyle(.grouped)
             .navigationTitle(model.nodeName ?? "Node")
-            .onAppear { power = Int(model.records.me?.power ?? 0) }
+            .onAppear {
+                power = Int(model.records.me?.power ?? 0)
+                cardName = model.records.me?.cardName ?? ""
+            }
             .onChange(of: model.records.me?.power) { p in power = Int(p ?? 0) }
+            .onChange(of: model.records.me?.cardName) { n in cardName = n ?? "" }
             .showsProblems()
             .confirmationDialog(
                 confirmingUpdate.map { "Update the node to \($0.release)?" } ?? "",
@@ -148,6 +155,47 @@ struct NodeView: View {
             Text("The node may restart to apply a setting; the app connects again. A new passkey takes effect the next time a device pairs.")
         }
         .disabled(!model.isConnected)
+    }
+
+    /// The node's presence card: off until the user turns it on, and the name it carries, which the
+    /// node keeps while it is off. Neither is ever set but by the user, here.
+    @ViewBuilder
+    private func card(_ me: NodeSelf) -> some View {
+        if model.speaksCards, let cards = me.cards {
+            let name = cardName.trimmingCharacters(in: .whitespacesAndNewlines)
+            SwiftUI.Section {
+                Toggle(
+                    "Send a presence card",
+                    isOn: Binding(
+                        get: { cards == 1 },
+                        set: { on in if on { confirmingCards = true } else { model.set(.cards(0)) } }))
+                    .confirmationDialog(
+                        "Turn on the presence card?", isPresented: $confirmingCards, titleVisibility: .visible
+                    ) {
+                        Button("Turn On") { model.set(.cards(1)) }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Every couple of hours the node sends its address, in clear, and its card name to "
+                            + "anyone near. They can tell it is the same node each time, and can use the address "
+                            + "to reach you.")
+                    }
+                TextField("Card name", text: $cardName)
+                if !Card.fits(name) {
+                    Text("A card name is at most \(Companion.cardNameMax) bytes.").foregroundStyle(.red)
+                }
+                if name != (me.cardName ?? "") {
+                    Button(name.isEmpty ? "Clear Card Name" : "Set Card Name") { model.setCardName(name) }
+                        .disabled(!Card.fits(name))
+                }
+            } header: {
+                Text("Presence card")
+            } footer: {
+                Text("Anyone near can see this node's address and the name above, every couple of hours, "
+                    + "while the card is on. It is off until you turn it on. The cards of others show "
+                    + "under Who's About in Contacts either way.")
+            }
+            .disabled(!model.isConnected)
+        }
     }
 
     @ViewBuilder

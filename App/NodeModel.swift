@@ -470,6 +470,13 @@ final class NodeModel: ObservableObject {
     func join(_ invite: UInt32) { request(.join(id: invite)) }
     func set(_ setting: Setting) { request(.set(setting)) }
 
+    /// Sets the name the node's cards carry, the one name it puts on the air in clear. Only ever
+    /// because the user typed it: the specification says a client never changes it by itself.
+    func setCardName(_ name: String) {
+        guard fits(name, Companion.cardNameMax) else { return }
+        request(.set(.cardName(name)))
+    }
+
     func dismissAsked(_ a: Asked) { asked.removeAll { $0.address == a.address } }
 
     private func fits(_ text: String, _ limit: Int) -> Bool {
@@ -478,6 +485,19 @@ final class NodeModel: ObservableObject {
             return false
         }
         return true
+    }
+
+    // MARK: Cards
+
+    /// Whether the node speaks cards: version 6 or later. Before it, nothing of them is offered.
+    var speaksCards: Bool { (agreed ?? 0) >= 6 }
+
+    /// The cards the node holds, who is about, the most recently heard first, each heard counted on
+    /// from when its record came.
+    var cardsHeard: [Card] {
+        records.cardsHeard { address in
+            UInt32(clamping: Int64(max(0, clock.timeIntervalSince(heard["k:\(address)"] ?? clock))))
+        }
     }
 
     // MARK: Positions
@@ -511,17 +531,19 @@ final class NodeModel: ObservableObject {
         return p
     }
 
-    /// The clock positions and sharing are shown against, read every half minute so that ages and
-    /// time left count on while they are on screen.
+    /// The clock positions, sharing and cards are shown against, read every half minute so that
+    /// ages and time left count on while they are on screen.
     @Published private(set) var clock = Date()
     private var ticking: AnyCancellable?
 
-    /// When each position and sharing record held arrived: the `age` and `minutes` each gives are
-    /// as of then. Keyed "c:" and an address, "g:" a group and routing id, "sc:" and "sg:" for sharing.
+    /// When each position, sharing and card record held arrived: the `age`, `minutes` and `heard`
+    /// each gives are as of then. Keyed "c:" and an address, "g:" a group and routing id, "sc:" and
+    /// "sg:" for sharing, "k:" and an address for a card.
     private var heard: [String: Date] = [:]
 
-    /// Notes that a position or sharing record arrived now: each one's `age` or `minutes` is as of
-    /// its own frame, so one the same as the record before it still sets the time anew.
+    /// Notes that a position, sharing or card record arrived now: each one's `age`, `minutes` or
+    /// `heard` is as of its own frame, so one the same as the record before it still sets the time
+    /// anew.
     private func noteArrival(_ body: Body) {
         let key: String
         switch body {
@@ -529,6 +551,7 @@ final class NodeModel: ObservableObject {
         case let .groupPosition(group, from, _): key = "g:\(group):\(Words.routingId(from))"
         case let .sharing(contact, _): key = "sc:\(contact)"
         case let .groupSharing(group, _): key = "sg:\(group)"
+        case let .card(c): key = "k:\(c.address)"
         default: return
         }
         heard[key] = Date()
@@ -541,6 +564,7 @@ final class NodeModel: ObservableObject {
         keys.formUnion(new.groupPositions.keys.map { "g:\($0.group):\(Words.routingId($0.from))" })
         keys.formUnion(new.sharing.keys.map { "sc:\($0)" })
         keys.formUnion(new.groupSharing.keys.map { "sg:\($0)" })
+        keys.formUnion(new.cards.keys.map { "k:\($0)" })
         heard = heard.filter { keys.contains($0.key) }
         clock = Date()
     }

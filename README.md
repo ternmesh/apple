@@ -9,9 +9,9 @@ What the app is, and why it is native, is in
 [decisions/phone-apps.md](https://github.com/ternmesh/spec/blob/main/decisions/phone-apps.md).
 It finds a node over Bluetooth LE, pairs with it by passkey, and from then on keeps it connected
 whenever it is in range, in the background too: chats with contacts and groups, invites, contacts
-and the addresses the node refused, the node's battery, airtime, neighbours and settings,
-positions shared with the node on a map and sharing the user's own, and updates to its firmware
-from [ternmesh.org](https://ternmesh.org/firmware/).
+and the addresses the node refused, who is about, the node's battery, airtime, neighbours and
+settings, its presence card, positions shared with the node on a map and sharing the user's own,
+and updates to its firmware from [ternmesh.org](https://ternmesh.org/firmware/).
 
 ```bash
 brew install xcodegen && xcodegen && open Tern.xcodeproj   # the app, for iPhone, iPad and Mac
@@ -37,12 +37,13 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 | `Sources/TernKit/Connection/RecordsFile.swift` | The records on disk: a short header, then each record as the frame that carried it, but for positions, sharing and cards, which every sync sends again. The Android app writes the same bytes. |
 | `Sources/TernKit/Connection/Conversations.swift` | The records as conversations, with what is unread; the `through` a `READ` may go to without marking another conversation's; and what is new enough to notify of. |
 | `Sources/TernKit/Connection/RoutingNames.swift` | An address's routing id, and the contacts' names by theirs: what a neighbour or a group message's writer shows as, when it is a contact. |
+| `Sources/TernKit/Connection/Cards.swift` | Who is about as a person reads it: the cards held, most recently heard first, each counted on from when its record came; the name a node's cards may carry; a card's name shown as its sender's claim. |
 | `Sources/TernKit/Connection/Words.swift` | The protocol's numbers in words: states, reasons, refusals, roles, how an update ended. |
 | `Sources/TernKit/Update/Updater.swift` | One firmware image sent to a node: `UPDATE_BEGIN`, on from the offset the node gives, `UPDATE_DATA` a chunk at a time, `UPDATE_END`, and going on after the link drops. Through the connection, with no I/O of its own. |
 | `Sources/TernKit/Update/Release.swift` | The release manifest at `ternmesh.org/firmware/latest.json`, the image in it for a node's board and region, and Semantic Versioning's order, with the little JSON it needs. |
 | `Sources/TernKit/Update/SHA256.swift` | SHA-256, for an image's digest: TernKit's own, so that it keeps to the standard library. |
 | `Sources/TernKit/Bluetooth/BluetoothLink.swift` | Core Bluetooth: scanning, connecting, pairing, the MTU, a frame to each write and notification, reconnecting to the remembered node, and restoring in the background. Built only where Core Bluetooth is. |
-| `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, the firmware it downloads and sends, and the phone's position given to the node while it shares, from `LocationFeed`), `Notifications` (a tap or a reply on one), and the Connect, Chats, chat, Contacts, Map and Node screens, with the share sheet. The map is MapKit's own view (`PositionMap`), which draws a cell before iOS 17 and macOS 14. |
+| `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, the firmware it downloads and sends, and the phone's position given to the node while it shares, from `LocationFeed`), `Notifications` (a tap or a reply on one), and the Connect, Chats, chat, Contacts, Who's About, Map and Node screens, with the share sheet. The map is MapKit's own view (`PositionMap`), which draws a cell before iOS 17 and macOS 14. |
 | `project.yml` | The Xcode project, for XcodeGen: one target for iOS and macOS. |
 | `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, frames of later versions in `unknown_to_older`, and the updater as the client in `update`. The records file, conversations and `READ`'s rule, routing ids against routing.md's vectors; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
 
@@ -72,6 +73,14 @@ from a chat's menu or the map. While the node shares with anyone, the app gives 
 location, at most every 15 seconds and in the background too, and asks for the permission only
 when the user first shares.
 
+Cards are per [draft/cards.md](https://github.com/ternmesh/spec/blob/main/draft/cards.md), with a
+node of version 6 or later. Who's About, reached from Contacts, lists the cards the node holds, the
+most recently heard first: each card's name in quotes, as its sender's claim, beside its address's
+short code, and never in place of a contact's name. A contact's card opens its conversation, and
+anyone else's opens Add Contact with the address and the card's name in it, to keep or change.
+The node's own card is turned on and named only on the Node screen, which says what that puts on
+the air; the app never does either by itself.
+
 Addresses are shared per [draft/sharing.md](https://github.com/ternmesh/spec/blob/main/draft/sharing.md),
 which is still a strawman: the Node screen shows the node's as a QR code, a link and the short code
 to compare aloud, and a contact is added by scanning a code, pasting a link or an address, or
@@ -90,9 +99,6 @@ CI builds the app for the iOS simulator and for the Mac, unsigned, as well as te
 
 ## Still to come
 
-* [Cards](https://github.com/ternmesh/spec/blob/main/draft/cards.md) in the app: TernKit speaks
-  version 6 and holds the cards a node reports, but no screen turns a node's cards on, names them
-  or shows who is about.
 * Links that open the app on the Mac: its entitlements given Associated Domains.
 * USB serial on the Mac, over `ByteStream`.
 * Tests of the app's screens, and of the Bluetooth link against a node.

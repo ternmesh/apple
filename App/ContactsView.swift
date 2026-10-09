@@ -1,7 +1,7 @@
-// The contacts the node holds, and the addresses it refused because they were not among them.
-// Saving an address as a contact is what lets it in: the node takes it the next time it asks. A
-// contact is added from the QR code on its owner's node screen, their link, or the address, and
-// shows the short code its owner can check against their own.
+// The contacts the node holds, the addresses it refused because they were not among them, and the
+// way to who is about. Saving an address as a contact is what lets it in: the node takes it the
+// next time it asks. A contact is added from the QR code on its owner's node screen, their link,
+// the address, or their card, and shows the short code its owner can check against their own.
 
 import SwiftUI
 import TernKit
@@ -17,6 +17,14 @@ struct ContactsView: View {
     var body: some View {
         NavigationStack {
             List {
+                if model.speaksCards {
+                    SwiftUI.Section {
+                        NavigationLink(value: WhoIsAbout()) {
+                            Label("Who's About", systemImage: "person.wave.2")
+                        }
+                        .badge(model.records.cards.count)
+                    }
+                }
                 AskedSection(saving: $saving)
                 SwiftUI.Section("Contacts") {
                     if model.records.contacts.isEmpty {
@@ -43,6 +51,9 @@ struct ContactsView: View {
             .navigationTitle("Contacts")
             .navigationDestination(for: Peer.self) { peer in
                 ChatView(peer: peer)
+            }
+            .navigationDestination(for: WhoIsAbout.self) { _ in
+                WhoIsAboutView()
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -107,6 +118,11 @@ struct AskedSection: View {
                 ForEach(model.asked) { a in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(a.address.short).font(.body.monospaced())
+                        // The address in an ASKED is proved, and a card from it is signed by it: what
+                        // the card says is still only what its sender says.
+                        if let card = model.records.cards[a.address], let claim = Words.claim(card.name) {
+                            Text(claim).font(.callout)
+                        }
                         Text("\(Words.asked(a.why)), \(a.when.formatted(date: .omitted, time: .shortened))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -147,6 +163,10 @@ struct SaveAskedAlert: ViewModifier {
             }
             Button("Cancel", role: .cancel) { name = "" }
         }
+        .onChange(of: saving) { a in
+            // A card from the address offers the name it carries, to keep or change.
+            if let a, let card = model.records.cards[a.address] { name = card.name }
+        }
     }
 }
 
@@ -171,11 +191,15 @@ struct AddContactSheet: View {
     @EnvironmentObject private var model: NodeModel
     @Environment(\.dismiss) private var dismiss
     @State private var text: String
-    @State private var name = ""
+    @State private var name: String
     @State private var scanning = false
+    /// Said under the name: where a name offered came from.
+    private let nameNote: String?
 
-    init(text: String = "") {
+    init(text: String = "", name: String = "", nameNote: String? = nil) {
         _text = State(initialValue: text)
+        _name = State(initialValue: name)
+        self.nameNote = nameNote
     }
 
     private var address: Address? { parseAddress(text) }
@@ -205,6 +229,9 @@ struct AddContactSheet: View {
                     }
                 }
                 TextField("Name", text: $name)
+                if let nameNote {
+                    Text(nameNote).font(.footnote).foregroundStyle(.secondary)
+                }
                 if name.utf8.count > Companion.nameMax {
                     Text("A name is at most \(Companion.nameMax) bytes.").foregroundStyle(.red)
                 }
