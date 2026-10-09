@@ -13,6 +13,11 @@ struct TernApp: App {
     @StateObject private var model = NodeModel()
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        // Before the model: a tap on a notification may be what launched the app.
+        Notifications.shared.start()
+    }
+
     var body: some Scene {
         #if os(macOS)
         // One window: the model knows one conversation on screen, which two windows would fight over.
@@ -67,6 +72,8 @@ struct RootView: View {
             .sheet(isPresented: Binding(get: { model.needsSetup }, set: { _ in })) {
                 SetupView().environmentObject(model)
             }
+            // A conversation opened from a notification is on the Chats screen.
+            .onChange(of: model.opened) { _ in section = .chats }
     }
 
     @ViewBuilder

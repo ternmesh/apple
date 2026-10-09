@@ -142,8 +142,13 @@ final class NodeModel: ObservableObject {
     var visible: Peer? {
         didSet { markRead() }
     }
+    /// Where the Chats screen is: the conversation open in it, if any.
+    @Published var chatPath: [Peer] = []
+    /// Counts the conversations opened from a notification, each of which brings Chats forward.
+    @Published private(set) var opened = 0
 
-    /// Whether the app is in front: notifications are only for when it is not.
+    /// Whether the app is in front: notifications are only for when it is not, or for a
+    /// conversation not on screen.
     /// iOS may launch the app in the background to restore its Bluetooth link, with no scene
     /// becoming active: it starts as the application is, not as active.
     var isActive = NodeModel.launchedActive {
@@ -227,6 +232,7 @@ final class NodeModel: ObservableObject {
             self.clock = now
         }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        Notifications.shared.attach(self)
     }
 
     // MARK: Connecting
@@ -248,6 +254,7 @@ final class NodeModel: ObservableObject {
             showUnread()
             outgoing = Self.loadOutgoing(id)
             asked = Self.loadAsked(id)
+            chatPath = []
             seen = [:]
             queuedFloor = 0
             firmware = nil
@@ -297,6 +304,7 @@ final class NodeModel: ObservableObject {
         showUnread()
         outgoing = []
         asked = []
+        chatPath = []
         seen = [:]
         queuedFloor = 0
         firmware = nil
@@ -840,7 +848,7 @@ final class NodeModel: ObservableObject {
                 // it is left out.
                 asked.removeAll { $0.address == address }
                 asked.insert(Asked(address: address, why: why, when: Date()), at: 0)
-            } else if !isActive, records.isArrival(body) {
+            } else if records.isArrival(body) {
                 notify(body)
             }
             noteArrival(body)
@@ -898,6 +906,8 @@ final class NodeModel: ObservableObject {
         }
     }
 
+    /// Tells the user of an item that arrived: while the app is in front, only if it is not in the
+    /// conversation on screen.
     private func notify(_ body: Body) {
         let peer: Peer
         let text: String
@@ -908,12 +918,51 @@ final class NodeModel: ObservableObject {
         case let .invite(i): (peer, text, id) = (.contact(i.contact), Item.invite(i).summary, i.id)
         default: return
         }
+        guard !isActive || visible != peer else { return }
+        post(identifier: "item-\(id)", peer: peer, body: text)
+    }
+
+    /// A notification of the conversation `peer`, which opens it when tapped and can be replied to.
+    private func post(identifier: String, peer: Peer, subtitle: String? = nil, body: String) {
+        guard let node = remembered else { return }
         let content = UNMutableNotificationContent()
         content.title = records.name(of: peer)
-        content.body = text
+        if let subtitle { content.subtitle = subtitle }
+        content.body = body
         content.sound = .default
-        let request = UNNotificationRequest(identifier: "item-\(id)", content: content, trigger: nil)
+        content.categoryIdentifier = Notifications.category
+        content.userInfo = Notifications.userInfo(peer, node: node)
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
+    }
+
+    /// Opens the conversation `peer` on the Chats screen, for a notification tapped. One of a node
+    /// the app has since left is not opened against another's records.
+    func open(_ peer: Peer, on node: UUID) {
+        guard node == remembered else { return }
+        chatPath = [peer]
+        opened += 1
+    }
+
+    /// Sends a reply typed into a notification, as the composer would. One that cannot go is not
+    /// lost: another notification says why, with the text to send again.
+    func reply(_ text: String, to peer: Peer, on node: UUID) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, node == remembered else { return }
+        let why: String
+        if Words.textBytes(text) > Companion.textMax {
+            why = "At most \(Companion.textMax) bytes."
+        } else if case let .group(g) = peer, records.groups[g] == nil {
+            why = "You are not in this group."
+        } else if !canWrite {
+            why = "Tern is not connected to the node."
+        } else if outgoing.contains(where: { $0.peer == peer && $0.text == text && $0.status == .sending }) {
+            why = "The same message is still being sent."
+        } else {
+            send(text, to: peer)
+            return
+        }
+        post(identifier: "reply-\(UUID().uuidString)", peer: peer, subtitle: "Reply not sent. \(why)", body: text)
     }
 
     // MARK: On disk

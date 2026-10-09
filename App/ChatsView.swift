@@ -6,7 +6,6 @@ import TernKit
 
 struct ChatsView: View {
     @EnvironmentObject private var model: NodeModel
-    @State private var path: [Peer] = []
     @State private var newChat = false
     @State private var newGroup = false
     @State private var groupName = ""
@@ -22,7 +21,8 @@ struct ChatsView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        // The model holds the path, so that a notification tapped can open a conversation.
+        NavigationStack(path: $model.chatPath) {
             List {
                 if !model.isConnected {
                     Text(words(model.linkState))
@@ -72,13 +72,13 @@ struct ChatsView: View {
             .sheet(isPresented: $newChat) {
                 NewChatSheet { peer in
                     newChat = false
-                    path = [peer]
+                    model.chatPath = [peer]
                 }
             }
             .alert("New group", isPresented: $newGroup) {
                 TextField("Name", text: $groupName)
                 Button("Make") {
-                    model.makeGroup(groupName) { group in path = [.group(group)] }
+                    model.makeGroup(groupName) { group in model.chatPath = [.group(group)] }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {

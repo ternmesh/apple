@@ -64,6 +64,18 @@ final class ConversationsTests: XCTestCase {
         XCTAssertEqual(r.conversation(with: .group(Self.hut)).items.map(\.id), [5])
     }
 
+    func testAConversationAsText() {
+        XCTAssertEqual(Peer.contact(Self.bob).key, "c:" + String(repeating: "b0", count: 32))
+        XCTAssertEqual(Peer.group(Self.hut).key, "g:4848484848484848")
+        for peer in [Peer.contact(Self.bob), .group(Self.hut)] {
+            XCTAssertEqual(Peer(key: peer.key), peer)
+        }
+        XCTAssertNil(Peer(key: "g:" + String(repeating: "b0", count: 32)), "an address is not a group's id")
+        XCTAssertNil(Peer(key: "c:4848484848484848"))
+        XCTAssertNil(Peer(key: "x:4848484848484848"))
+        XCTAssertNil(Peer(key: ""))
+    }
+
     // MARK: READ
 
     func testReadThroughEverythingHereWhenNothingElseIsUnread() {

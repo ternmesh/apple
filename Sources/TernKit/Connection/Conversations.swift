@@ -8,6 +8,29 @@ public enum Peer: Hashable, Sendable {
     case group(GroupID)
 }
 
+extension Peer {
+    /// The conversation as text, for what outlives the app's memory, such as a notification: "c:"
+    /// and the address, or "g:" and the group's id, in hex. The Android app writes the same.
+    public var key: String {
+        switch self {
+        case let .contact(address): "c:\(address)"
+        case let .group(group): "g:\(group)"
+        }
+    }
+
+    /// The conversation a `key` names, or nil for anything else.
+    public init?(key: String) {
+        let hex = String(key.dropFirst(2))
+        if key.hasPrefix("c:"), let address = Address(hex: hex) {
+            self = .contact(address)
+        } else if key.hasPrefix("g:"), let group = GroupID(hex: hex) {
+            self = .group(group)
+        } else {
+            return nil
+        }
+    }
+}
+
 extension Item {
     /// The conversation it belongs to. An invite is between two people, so it sits with the
     /// address it went to or came from, not with the group it is to.
