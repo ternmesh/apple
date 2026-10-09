@@ -2,6 +2,11 @@
 // a claim its sender made, so it is shown as one, beside the address's short code, and never as a
 // contact's name. How long ago a card was heard is as of its record, and counts on from there.
 
+/// A card is its address: the node holds one card for each.
+extension Card: Identifiable {
+    public var id: Address { address }
+}
+
 extension Card {
     /// The card `seconds` after its record came: heard that much longer ago. It stops at the
     /// largest `heard` can say rather than going round.
