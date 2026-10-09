@@ -1,18 +1,19 @@
-// The companion protocol's frames, version 6: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 7: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 5 is this without cards (the settings 5 and 6,
+    /// The version this client speaks. Version 6 is this without join codes (the requests
+    /// `GROUP_LINK` and `JOIN_LINK`, and the answer `LINK`), version 5 is version 6 without cards (the settings 5 and 6,
     /// `SELF`'s `cards` and `card_name`, and the news `CARD` and `CARD_GONE`), version 4 is
     /// version 5 without positions (the requests `0x33` to `0x35`, error 12, and the news
     /// `POSITION`, `GROUP_POSITION`, `SHARING` and `GROUP_SHARING`), version 3 is version 4
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 6
+    public static let version: UInt8 = 7
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -22,12 +23,15 @@ public enum Companion {
         case 0x30...0x32, 0x46: 4
         case 0x33...0x35, 0x8E...0x91: 5
         case 0x92...0x93: 6
+        case 0x26...0x27, 0x47: 7
         default: 0
         }
     }
     public static let maxFrame = 180
     public static let textMax = 128
     public static let nameMax = 31
+    /// A join code's link, the longest: a group whose name is 31 bytes.
+    public static let linkMax = 102
     /// The name a node's cards carry, and the one a card held carried.
     public static let cardNameMax = 31
     public static let regionMax = 15
@@ -79,8 +83,8 @@ public struct Address: Hashable, Sendable, CustomStringConvertible {
     public var description: String { Hex.encode(bytes) }
 }
 
-/// A group's id, which the node works out from the group's secret. A client never holds the
-/// secret: no frame carries it.
+/// A group's id, which the node works out from the group's secret. No frame carries the secret but
+/// a join code's, in `LINK` and `JOIN_LINK`, which a client passes on and does not keep.
 public struct GroupID: Hashable, Sendable, CustomStringConvertible {
     public static let length = 8
     public let bytes: [UInt8]
@@ -483,7 +487,7 @@ public struct Card: Equatable, Sendable {
     }
 }
 
-/// What a frame says: every frame of version 6.
+/// What a frame says: every frame of version 7.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -502,6 +506,12 @@ public enum Body: Equatable, Sendable {
     case sendGroup(ref: UInt32, group: GroupID, text: String)
     case sendInvite(group: GroupID, to: Address)
     case join(id: UInt32)
+    /// The join code of `group`, which the node answers with `LINK`. Only ever what the user asked
+    /// to see or share.
+    case groupLink(group: GroupID)
+    /// Join the group a join code is for, which the node answers with `MADE`. Only ever a code the
+    /// user asked to join from.
+    case joinLink(link: String)
     /// An image of `size` bytes, whose SHA-256 is `digest`, follows.
     case updateBegin(size: UInt32, digest: Digest)
     /// The image's bytes from `offset`: `Companion.updateChunk` of them, all but the last.
@@ -530,6 +540,8 @@ public enum Body: Equatable, Sendable {
     case made(group: GroupID)
     /// The offset an update goes on from.
     case updating(offset: UInt32)
+    /// A group's join code, which `GROUP_LINK` asked for: the group's secret, shown and let go.
+    case link(link: String)
 
     // News, sent by the node with its count as seq.
     case nodeSelf(NodeSelf)
@@ -579,6 +591,8 @@ public enum Body: Equatable, Sendable {
         case .sendGroup: 0x23
         case .sendInvite: 0x24
         case .join: 0x25
+        case .groupLink: 0x26
+        case .joinLink: 0x27
         case .updateBegin: 0x30
         case .updateData: 0x31
         case .updateEnd: 0x32
@@ -592,6 +606,7 @@ public enum Body: Equatable, Sendable {
         case .queued: 0x44
         case .made: 0x45
         case .updating: 0x46
+        case .link: 0x47
         case .nodeSelf: 0x80
         case .contact: 0x81
         case .contactGone: 0x82
@@ -634,6 +649,8 @@ public enum Body: Equatable, Sendable {
         case .sendGroup: "SEND_GROUP"
         case .sendInvite: "SEND_INVITE"
         case .join: "JOIN"
+        case .groupLink: "GROUP_LINK"
+        case .joinLink: "JOIN_LINK"
         case .updateBegin: "UPDATE_BEGIN"
         case .updateData: "UPDATE_DATA"
         case .updateEnd: "UPDATE_END"
@@ -647,6 +664,7 @@ public enum Body: Equatable, Sendable {
         case .queued: "QUEUED"
         case .made: "MADE"
         case .updating: "UPDATING"
+        case .link: "LINK"
         case .nodeSelf: "SELF"
         case .contact: "CONTACT"
         case .contactGone: "CONTACT_GONE"

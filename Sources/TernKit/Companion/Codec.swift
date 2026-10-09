@@ -61,7 +61,7 @@ extension Frame {
             w.addr(address)
         case let .makeGroup(name):
             try w.str(name, limit: Companion.nameMax, field: "name")
-        case let .leaveGroup(group), let .made(group), let .groupGone(group):
+        case let .leaveGroup(group), let .made(group), let .groupGone(group), let .groupLink(group):
             w.gid(group)
         case let .nameGroup(group, name):
             w.gid(group)
@@ -75,6 +75,8 @@ extension Frame {
             w.addr(to)
         case let .join(id):
             w.u32(id)
+        case let .joinLink(link), let .link(link):
+            try w.str(link, limit: Companion.linkMax, field: "link")
         case let .updateBegin(size, digest):
             w.u32(size)
             w.digest(digest)
@@ -234,6 +236,8 @@ extension Frame {
         case 0x23: body = .sendGroup(ref: try r.u32(), group: try r.gid(), text: try r.str(limit: Companion.textMax))
         case 0x24: body = .sendInvite(group: try r.gid(), to: try r.addr())
         case 0x25: body = .join(id: try r.u32())
+        case 0x26: body = .groupLink(group: try r.gid())
+        case 0x27: body = .joinLink(link: try r.str(limit: Companion.linkMax))
         case 0x30: body = .updateBegin(size: try r.u32(), digest: try r.digest())
         case 0x31: body = .updateData(offset: try r.u32(), data: try r.blob(limit: Companion.updateChunk))
         case 0x32: body = .updateEnd
@@ -260,6 +264,7 @@ extension Frame {
         case 0x44: body = .queued(id: try r.u32())
         case 0x45: body = .made(group: try r.gid())
         case 0x46: body = .updating(offset: try r.u32())
+        case 0x47: body = .link(link: try r.str(limit: Companion.linkMax))
         case 0x80:
             var me = NodeSelf(
                 address: try r.addr(), role: try r.u8(), region: try r.str(limit: Companion.regionMax),

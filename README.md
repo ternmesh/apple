@@ -29,9 +29,10 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 6, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 7, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
+| `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
 | `Sources/TernKit/Connection/Connection.swift` | One connection, the client's half: `HELLO` and the version both speak, one request at a time, counted news, syncing again, and the `PING` that keeps a node from taking the app for gone. No I/O and no clock of its own: a link hands it frames and calls `tick()`. |
 | `Sources/TernKit/Connection/Records.swift` | What the node has said it holds, as news leaves it, positions, sharing and cards included, and the `after` the next sync asks from. |
 | `Sources/TernKit/Connection/RecordsFile.swift` | The records on disk: a short header, then each record as the frame that carried it, but for positions, sharing and cards, which every sync sends again. The Android app writes the same bytes. |
@@ -47,8 +48,10 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 | `project.yml` | The Xcode project, for XcodeGen: one target for iOS and macOS. |
 | `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, frames of later versions in `unknown_to_older`, and the updater as the client in `update`. The records file, conversations and `READ`'s rule, routing ids against routing.md's vectors; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
 
-The vectors' `group_ids` are not run here. A client never holds a group's secret, since no frame
-carries one, so working out an id from it is the node's part. Nor is `refusals` run as a
+The vectors' `group_ids` are run against the join code reader, which works out the id of the
+group a code is for, so that the app can say whether the node holds it already; `groups.json`'s
+join codes are run too, and `qr.json`, a copy of the site's, holds the QR encoder to codes made with
+segno, module for module. Not `refusals` run as a
 conversation: it is a client that breaks the rules on purpose, to see a node refuse, so its frames
 are only read and built back, and the updater's answers to each refusal are tested against a node
 played by hand.
@@ -91,6 +94,14 @@ and the `apple-app-site-association` file ternmesh.org serves for `/a/*` and `/A
 so to run the app under one, take `CODE_SIGN_ENTITLEMENTS[sdk=iphone*]` out of `project.yml`. The
 release's iOS archive is unsigned, so the release workflow gives it the entitlement before the
 export signs it for TestFlight. The Mac app does not have it yet.
+
+A group is handed on by its join code, per [draft/groups.md](https://github.com/ternmesh/spec/blob/main/draft/groups.md#join-codes).
+The group's menu has Join Code, which says first that anyone who sees the code can read the group,
+and only then asks the node for it and shows the QR code, the link, Copy and Share. Join a Group,
+in the Chats screen's menu, takes a code scanned or a link pasted, names the group, and joins it;
+a `ternmesh.org/G#…` link opened on the phone opens the same sheet, through the same entitlement
+and the file's `/G` and `/g`. The node writes the link and reads it, and the app keeps neither the
+link nor the secret in it once the sheet closes.
 
 Tapping a notification of a message opens its conversation, and its Reply action sends from it.
 While the app is in front, only messages to a conversation not on screen are notified.

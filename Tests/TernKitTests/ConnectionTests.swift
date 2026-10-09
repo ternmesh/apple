@@ -20,10 +20,12 @@ final class ConnectionTests: XCTestCase {
         let link = Link(Connection(now: { 0 }, wallTime: { time }))
         let answers = link.replay(frames)
 
-        XCTAssertEqual(answers.count, 20)
-        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 18, "every request answered but two")
+        XCTAssertEqual(answers.count, 23)
+        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 20, "every request answered but three")
         let refused = answers.indices.filter { answers[$0] == .failure(.refused(code: ErrorCode.refused)) }
-        XCTAssertEqual(refused, [12, 17], "a precision past 24, and cards neither on nor off")
+        XCTAssertEqual(refused, [12, 17, 22], "a precision past 24, cards neither on nor off, and a join code whose check fails")
+        guard case let .link(shown) = try answers[20].get() else { return XCTFail("GROUP_LINK is answered with LINK") }
+        XCTAssertEqual(JoinCode.read(shown), JoinCode(group: GroupID(hex: "c8eafadc0857a696")!, name: "Ridge walkers"))
         let r = link.connection.records
         XCTAssertEqual(r.me?.region, "EU868")
         XCTAssertEqual(r.me?.cards, 0, "cards turned on, then off")
@@ -39,7 +41,9 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(link.events.filter { if case .news(.cardGone) = $0 { true } else { false } }.count, 1)
         XCTAssertEqual(r.cards, [:])
         XCTAssertNotNil(r.contacts[cards[0].address])
-        XCTAssertEqual(r.groups.values.map(\.name), ["Ridge walkers"], "the group made was left, the one joined renamed")
+        XCTAssertEqual(
+            r.groups.values.map(\.name).sorted(), ["Hut", "Ridge walkers"],
+            "the group made was left and joined again from its code, the one joined from an invite renamed")
         XCTAssertEqual(r.items.keys.sorted(), Array(17...22))
         XCTAssertEqual(r.ordered.filter(\.isUnread), [], "READ marked the message, group message and invite read")
         XCTAssertEqual(r.items[18]?.state, MessageState.delivered)
@@ -145,6 +149,29 @@ final class ConnectionTests: XCTestCase {
         XCTAssertNil(r.me?.cards)
         XCTAssertNil(r.me?.cardName)
         XCTAssertEqual(r.cards, [:])
+    }
+
+    /// A client of version 6 is told of cards, and does not send a request its version does not
+    /// define: a join code is version 7's.
+    func testOlderVersion6() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 6 }!
+        let frames = older["frames"]!.array
+        let link = Link(Connection(version: 6, now: { 0 }, wallTime: nil))
+        _ = link.replay(Array(frames.dropLast(2)))
+        XCTAssertEqual(link.connection.agreed, 6)
+        let request = try Frame.decode(frames[frames.count - 2]["frame"]!.bytes).body
+        XCTAssertEqual(request.name, "JOIN_LINK")
+
+        var result: Result<Body, RequestFailure>?
+        link.connection.submit(request) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        link.connection.submit(.groupLink(group: GroupID(hex: "c8eafadc0857a696")!)) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(link.out, [])
+        let r = link.connection.records
+        XCTAssertEqual(r.syncedVersion, 6)
+        XCTAssertNotNil(r.me?.cards)
+        XCTAssertEqual(r.cards.count, 1)
     }
 
     /// A client of the latest version talking to a node of version 5 does the same, and still

@@ -212,6 +212,21 @@ final class CompanionVectorTests: XCTestCase {
             XCTAssertThrowsError(try Frame.decode([type, 1], version: 5)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
             XCTAssertThrowsError(try Frame.decode([type, 1], version: 6)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
         }
+        for type: UInt8 in [0x26, 0x27, 0x47] {
+            XCTAssertEqual(Companion.since(type: type), 7)
+            XCTAssertThrowsError(try Frame.decode([type, 1], version: 6)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+            XCTAssertThrowsError(try Frame.decode([type, 1], version: 7)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
+        }
+    }
+
+    /// A join code's link is at most 102 bytes, either way it goes.
+    func testALinkIsAtMost102Bytes() throws {
+        let link = JoinCode.link + String(repeating: "A", count: Companion.linkMax - JoinCode.link.utf8.count)
+        for body in [Body.joinLink(link: link), .link(link: link)] {
+            XCTAssertEqual(try Frame.decode(try Frame(seq: 1, body: body).encode()).body, body)
+        }
+        XCTAssertThrowsError(try Frame(seq: 1, body: .joinLink(link: link + "A")).encode())
+        XCTAssertThrowsError(try Frame(seq: 1, body: .link(link: link + "A")).encode())
     }
 
     /// Version 6's settings are undefined to version 5 before their values are read, and a
@@ -308,6 +323,8 @@ final class CompanionVectorTests: XCTestCase {
         case "SEND_GROUP": return .sendGroup(ref: u32("ref"), group: gid("group"), text: str("text"))
         case "SEND_INVITE": return .sendInvite(group: gid("group"), to: addr("to"))
         case "JOIN": return .join(id: u32("id"))
+        case "GROUP_LINK": return .groupLink(group: gid("group"))
+        case "JOIN_LINK": return .joinLink(link: str("link"))
         case "OK": return .ok
         case "ERROR": return .error(code: u8("code"))
         case "INFO":
@@ -319,6 +336,7 @@ final class CompanionVectorTests: XCTestCase {
         case "UPDATE_DATA": return .updateData(offset: u32("offset"), data: f["data"]!.bytes)
         case "UPDATE_END": return .updateEnd
         case "UPDATING": return .updating(offset: u32("offset"))
+        case "LINK": return .link(link: str("link"))
         case "SET_POSITION":
             return .setPosition(
                 lat: i32("lat"), lon: i32("lon"), altitude: i16("altitude"), accuracy: u16("accuracy"), age: u16("age"))
