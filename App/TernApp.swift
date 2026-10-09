@@ -60,10 +60,21 @@ struct RootView: View {
     @State private var section: Pane?
 
     var body: some View {
+        panes
+            // Over every screen, until it is done or skipped; it closes itself when the link drops.
+            .sheet(isPresented: Binding(get: { model.needsSetup }, set: { _ in })) {
+                SetupView().environmentObject(model)
+            }
+    }
+
+    @ViewBuilder
+    private var panes: some View {
         #if os(macOS)
         NavigationSplitView {
             List(Pane.allCases, selection: $section) { s in
-                Label(s.rawValue, systemImage: s.icon).tag(s)
+                Label(s.rawValue, systemImage: s.icon)
+                    .badge(s == .chats ? model.unread : 0)
+                    .tag(s)
             }
             .navigationSplitViewColumnWidth(min: 160, ideal: 180)
         } detail: {
@@ -76,6 +87,7 @@ struct RootView: View {
             ForEach(Pane.allCases) { s in
                 screen(s)
                     .tabItem { Label(s.rawValue, systemImage: s.icon) }
+                    .badge(s == .chats ? model.unread : 0)
                     .tag(s)
             }
         }
