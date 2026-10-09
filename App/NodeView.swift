@@ -210,7 +210,7 @@ struct NodeView: View {
         switch model.firmwareStatus {
         case .idle:
             Button("Check for Update") { model.checkForUpdate() }
-                .disabled(!model.isConnected)
+                .disabled(!model.isReady)
         case .checking:
             HStack {
                 ProgressView()
@@ -221,12 +221,12 @@ struct NodeView: View {
             case .newer:
                 LabeledContent("Available", value: offer.release)
                 Button("Update to \(offer.release)…") { confirmingUpdate = offer }
-                    .disabled(!model.isConnected)
+                    .disabled(!model.isReady)
             case .unknown:
                 Text("Release \(offer.release) is available. The node does not say which release it runs, so the app cannot tell whether it is newer.")
                     .foregroundStyle(.secondary)
                 Button("Install \(offer.release)…") { confirmingUpdate = offer }
-                    .disabled(!model.isConnected)
+                    .disabled(!model.isReady)
             case .same:
                 Text("Up to date: \(offer.release) is the latest release.").foregroundStyle(.secondary)
                 Button("Check Again") { model.checkForUpdate() }
@@ -263,11 +263,11 @@ struct NodeView: View {
         case let .done(result):
             Text(result)
             Button("Check for Update") { model.checkForUpdate() }
-                .disabled(!model.isConnected)
+                .disabled(!model.isReady)
         case let .failed(why):
             Text(why).foregroundStyle(.secondary)
             Button("Try Again") { model.checkForUpdate() }
-                .disabled(!model.isConnected)
+                .disabled(!model.isReady)
         }
     }
 

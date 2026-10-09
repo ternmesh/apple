@@ -254,6 +254,9 @@ final class NodeModel: ObservableObject {
 
     var isConnected: Bool { linkState == .ready || linkState == .syncing }
 
+    /// Connected, and the first sync done: what the app holds is the node's.
+    var isReady: Bool { linkState == .ready }
+
     /// Whether a message may be written now. Not while the first sync is under way: what the app
     /// holds is not yet the node's, and the `after` a send is matched from must be.
     var canWrite: Bool { linkState == .ready }
@@ -379,7 +382,8 @@ final class NodeModel: ObservableObject {
 
     /// Asks the site for its latest release, and finds the image in it for the node.
     func checkForUpdate() {
-        guard let board, !board.isEmpty else { return }
+        // Not until the first sync is done: the region held is not yet the node's.
+        guard linkState == .ready, let board, !board.isEmpty else { return }
         guard let region = records.me?.region, !region.isEmpty else {
             firmwareStatus = .nothing("Set the node's region first: each region has its own image.")
             return
@@ -412,15 +416,8 @@ final class NodeModel: ObservableObject {
 
     /// Downloads the image offered, checks it, and sends it to the node.
     func update() {
-        guard case let .found(offer) = firmwareStatus, let id = remembered else { return }
-        // The region may have been changed since the check: an image is for one region.
-        // So may its firmware, by another client: what was newer then may not be now.
-        guard offer.image.board.lowercased() == board?.lowercased(),
-              offer.image.region.lowercased() == records.me?.region.lowercased(),
-              (release ?? "") == checkedAgainst else {
-            firmwareStatus = .nothing("The node has changed since the check. Check for an update again.")
-            return
-        }
+        guard linkState == .ready, case let .found(offer) = firmwareStatus, let id = remembered else { return }
+        guard stillFor(offer) else { return }
         updateNode = id
         if let d = downloaded, d.image == offer.image { return send(d.bytes, offer) }
         firmwareStatus = .downloading(offer)
@@ -465,7 +462,22 @@ final class NodeModel: ObservableObject {
         }
     }
 
+    /// Whether the node is still what the offer was chosen for, asked again before downloading and
+    /// before sending: the node's region may have changed since the check, by this client or another
+    /// (and a sync may have only just said so), and so may its firmware, so that what was newer is
+    /// not. An image is for one board and one region.
+    private func stillFor(_ offer: FirmwareOffer) -> Bool {
+        guard offer.image.board.lowercased() == board?.lowercased(),
+              offer.image.region.lowercased() == records.me?.region.lowercased(),
+              (release ?? "") == checkedAgainst else {
+            firmwareStatus = .nothing("The node has changed since the check. Check for an update again.")
+            return false
+        }
+        return true
+    }
+
     private func send(_ bytes: [UInt8], _ offer: FirmwareOffer) {
+        guard stillFor(offer) else { return }
         let u = Updater(image: bytes, digest: offer.image.sha256)
         updater = u
         u.onChange = { [weak self, weak u] in
