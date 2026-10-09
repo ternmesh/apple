@@ -44,6 +44,8 @@ extension Frame {
             case let .role(role): w.u8(role)
             case let .power(dbm): w.i8(dbm)
             case let .passkey(key): w.u32(key)
+            case let .cards(on): w.u8(on)
+            case let .cardName(name): try w.str(name, limit: Companion.cardNameMax, field: "card name")
             }
         case let .send(ref, to, text):
             w.u32(ref)
@@ -54,7 +56,8 @@ extension Frame {
         case let .saveContact(address, name):
             w.addr(address)
             try w.str(name, limit: Companion.nameMax, field: "name")
-        case let .removeContact(address), let .endSession(address), let .contactGone(address):
+        case let .removeContact(address), let .endSession(address), let .contactGone(address),
+             let .cardGone(address):
             w.addr(address)
         case let .makeGroup(name):
             try w.str(name, limit: Companion.nameMax, field: "name")
@@ -117,6 +120,11 @@ extension Frame {
             try w.str(s.region, limit: Companion.regionMax, field: "region")
             w.i8(s.power)
             w.u32(s.time)
+            // Version 6's fields, both or neither.
+            if s.cards != nil || s.cardName != nil {
+                w.u8(s.cards ?? 0)
+                try w.str(s.cardName ?? "", limit: Companion.cardNameMax, field: "card name")
+            }
         case let .contact(c):
             w.addr(c.address)
             w.u8(c.session)
@@ -177,6 +185,10 @@ extension Frame {
             w.u8(i.reason)
             w.u16(i.wait)
             try w.str(i.name, limit: Companion.nameMax, field: "name")
+        case let .card(c):
+            w.addr(c.address)
+            w.u32(c.heard)
+            try w.str(c.name, limit: Companion.cardNameMax, field: "name")
         }
         guard w.bytes.count <= Companion.maxFrame else { throw EncodeError.frameTooLong(w.bytes.count) }
         return w.bytes
@@ -198,11 +210,16 @@ extension Frame {
         case 0x03: body = .ping
         case 0x04: body = .setTime(try r.u32())
         case 0x05:
-            switch try r.u8() {
+            let setting = try r.u8()
+            // A setting the version spoken does not define is undefined, as a type is.
+            guard Setting.since(number: setting) <= version else { throw DecodeError.undefined }
+            switch setting {
             case 1: body = .set(.region(try r.str(limit: Companion.regionMax)))
             case 2: body = .set(.role(try r.u8()))
             case 3: body = .set(.power(try r.i8()))
             case 4: body = .set(.passkey(try r.u32()))
+            case 5: body = .set(.cards(try r.u8()))
+            case 6: body = .set(.cardName(try r.str(limit: Companion.cardNameMax)))
             default: throw DecodeError.undefined
             }
         case 0x10:
@@ -244,9 +261,15 @@ extension Frame {
         case 0x45: body = .made(group: try r.gid())
         case 0x46: body = .updating(offset: try r.u32())
         case 0x80:
-            body = .nodeSelf(NodeSelf(
+            var me = NodeSelf(
                 address: try r.addr(), role: try r.u8(), region: try r.str(limit: Companion.regionMax),
-                power: try r.i8(), time: try r.u32()))
+                power: try r.i8(), time: try r.u32())
+            // A client of version 5 or earlier is sent a `SELF` that ends here.
+            if version >= 6 {
+                me.cards = try r.u8()
+                me.cardName = try r.str(limit: Companion.cardNameMax)
+            }
+            body = .nodeSelf(me)
         case 0x81:
             body = .contact(Contact(address: try r.addr(), session: try r.u8(), name: try r.str(limit: Companion.nameMax)))
         case 0x82: body = .contactGone(address: try r.addr())
@@ -277,6 +300,9 @@ extension Frame {
         case 0x8F: body = .groupPosition(group: try r.gid(), from: try r.u32(), try r.position())
         case 0x90: body = .sharing(contact: try r.addr(), try r.sharing())
         case 0x91: body = .groupSharing(group: try r.gid(), try r.sharing())
+        case 0x92:
+            body = .card(Card(address: try r.addr(), heard: try r.u32(), name: try r.str(limit: Companion.cardNameMax)))
+        case 0x93: body = .cardGone(address: try r.addr())
         default: throw DecodeError.undefined
         }
         return Frame(seq: bytes[1], body: body)

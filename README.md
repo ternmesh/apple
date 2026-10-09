@@ -29,12 +29,12 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 5, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 6, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Connection/Connection.swift` | One connection, the client's half: `HELLO` and the version both speak, one request at a time, counted news, syncing again, and the `PING` that keeps a node from taking the app for gone. No I/O and no clock of its own: a link hands it frames and calls `tick()`. |
-| `Sources/TernKit/Connection/Records.swift` | What the node has said it holds, as news leaves it, positions and sharing included, and the `after` the next sync asks from. |
-| `Sources/TernKit/Connection/RecordsFile.swift` | The records on disk: a short header, then each record as the frame that carried it, but for positions and sharing, which every sync sends again. The Android app writes the same bytes. |
+| `Sources/TernKit/Connection/Records.swift` | What the node has said it holds, as news leaves it, positions, sharing and cards included, and the `after` the next sync asks from. |
+| `Sources/TernKit/Connection/RecordsFile.swift` | The records on disk: a short header, then each record as the frame that carried it, but for positions, sharing and cards, which every sync sends again. The Android app writes the same bytes. |
 | `Sources/TernKit/Connection/Conversations.swift` | The records as conversations, with what is unread; the `through` a `READ` may go to without marking another conversation's; and what is new enough to notify of. |
 | `Sources/TernKit/Connection/RoutingNames.swift` | An address's routing id, and the contacts' names by theirs: what a neighbour or a group message's writer shows as, when it is a contact. |
 | `Sources/TernKit/Connection/Words.swift` | The protocol's numbers in words: states, reasons, refusals, roles, how an update ended. |
@@ -90,6 +90,9 @@ CI builds the app for the iOS simulator and for the Mac, unsigned, as well as te
 
 ## Still to come
 
+* [Cards](https://github.com/ternmesh/spec/blob/main/draft/cards.md) in the app: TernKit speaks
+  version 6 and holds the cards a node reports, but no screen turns a node's cards on, names them
+  or shows who is about.
 * Links that open the app from a TestFlight build, and on the Mac: the release's iOS archive signed,
   and the Mac's entitlements given Associated Domains.
 * USB serial on the Mac, over `ByteStream`.

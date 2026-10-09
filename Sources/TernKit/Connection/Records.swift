@@ -1,6 +1,7 @@
 // What a client holds of a node: the records its news gave, kept as the specification's "What the
 // node holds" says. A record replaces the one before it; STATE changes a message in place; a sync
-// is the whole list of contacts, groups, neighbours, positions and sharing, but not of messages.
+// is the whole list of contacts, groups, neighbours, positions, sharing and cards, but not of
+// messages.
 
 /// A message, group message or invite: the three records that share the node's count of `id`s,
 /// and a message's states.
@@ -90,6 +91,9 @@ public struct Records: Equatable, Sendable {
     /// Whom the node shares its position with, and how. Never sharing that is off.
     public var sharing: [Address: PositionSharing] = [:]
     public var groupSharing: [GroupID: PositionSharing] = [:]
+    /// The cards the node holds, by the address each is from: who is about. A card's name is its
+    /// sender's claim, and a contact's name is never taken from it.
+    public var cards: [Address: Card] = [:]
     public var airtime: Airtime?
     public var power: Power?
     /// The version both ends spoke at the last sync that finished, nil if none has. A node may
@@ -111,6 +115,7 @@ public struct Records: Equatable, Sendable {
         var groupPositions: Set<GroupMember> = []
         var sharing: Set<Address> = []
         var groupSharing: Set<GroupID> = []
+        var cards: Set<Address> = []
     }
 
     public init() {}
@@ -118,7 +123,8 @@ public struct Records: Equatable, Sendable {
     public static func == (a: Records, b: Records) -> Bool {
         a.me == b.me && a.contacts == b.contacts && a.groups == b.groups && a.items == b.items
             && a.neighbours == b.neighbours && a.positions == b.positions && a.groupPositions == b.groupPositions
-            && a.sharing == b.sharing && a.groupSharing == b.groupSharing && a.airtime == b.airtime && a.power == b.power
+            && a.sharing == b.sharing && a.groupSharing == b.groupSharing && a.cards == b.cards
+            && a.airtime == b.airtime && a.power == b.power
             && a.syncedVersion == b.syncedVersion && a.missedSince == b.missedSince
     }
 
@@ -172,6 +178,11 @@ public struct Records: Equatable, Sendable {
         case let .groupSharing(group, s):
             groupSharing[group] = s.isOn ? s : nil
             if s.isOn { syncing?.groupSharing.insert(group) }
+        case let .card(c):
+            cards[c.address] = c
+            syncing?.cards.insert(c.address)
+        case let .cardGone(address):
+            cards[address] = nil
         case let .airtime(a):
             airtime = a
         case let .power(p):
@@ -218,6 +229,8 @@ public struct Records: Equatable, Sendable {
             sharing = sharing.filter { seen.sharing.contains($0.key) }
             groupSharing = groupSharing.filter { seen.groupSharing.contains($0.key) }
         }
+        // Nor one of version 5 or earlier cards.
+        if version >= 6 { cards = cards.filter { seen.cards.contains($0.key) } }
         syncedVersion = version
         missedSince = nil
         syncing = nil

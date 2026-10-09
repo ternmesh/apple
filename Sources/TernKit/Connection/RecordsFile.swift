@@ -11,9 +11,13 @@
 //         Companion.version. SELF, every CONTACT, every GROUP, every MESSAGE, GROUP_MESSAGE and
 //         INVITE in id order, every NEIGHBOUR, then AIRTIME and POWER, each only if held.
 //
-// Positions and sharing are not kept. A position's age and sharing's minutes left are as of when
-// the record was sent, so on disk they only grow wrong, and every sync sends both whole again. A
-// file that holds them all the same is read, and they are passed over.
+// A SELF from a node of version 5 or earlier, or one a client of version 5 wrote, ends before
+// `cards` and `card_name`: it is read as version 5's, and says nothing of cards.
+//
+// Positions, sharing and cards are not kept. A position's age, sharing's minutes left and how long
+// ago a card was heard are as of when the record was sent, so on disk they only grow wrong, and
+// every sync sends each whole again. A file that holds them all the same is read, and they are
+// passed over.
 
 extension Records {
     static let fileMagic: [UInt8] = Array("TRNR".utf8)
@@ -71,7 +75,7 @@ extension Records {
             let n = Int(bytes[at])
             at += 1
             guard at + n <= bytes.count,
-                  let frame = try? Frame.decode(Array(bytes[at..<at + n])),
+                  let frame = Records.kept(Array(bytes[at..<at + n])),
                   frame.body.isRecord || frame.body.isFleeting
             else { return }
             if frame.body.isRecord { r.apply(frame.body) }
@@ -82,6 +86,16 @@ extension Records {
             r.missedSince = UInt32(bytes[7]) << 24 | UInt32(bytes[8]) << 16 | UInt32(bytes[9]) << 8 | UInt32(bytes[10])
         }
         self = r
+    }
+}
+
+extension Records {
+    /// One of the file's frames. `SELF` is the one record a later version made longer, so one
+    /// that does not read as this version's is read as the version before cards.
+    static func kept(_ frame: [UInt8]) -> Frame? {
+        if let read = try? Frame.decode(frame) { return read }
+        guard frame.first == 0x80 else { return nil }
+        return try? Frame.decode(frame, version: 5)
     }
 }
 
@@ -97,7 +111,7 @@ extension Body {
     /// A record whose numbers count on from when it was sent: one the file does not keep.
     var isFleeting: Bool {
         switch self {
-        case .position, .groupPosition, .sharing, .groupSharing: true
+        case .position, .groupPosition, .sharing, .groupSharing, .card: true
         default: false
         }
     }

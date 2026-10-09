@@ -1,17 +1,18 @@
-// The companion protocol's frames, version 5: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 6: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 4 is this without positions (the requests `0x33`
-    /// to `0x35`, error 12, and the news `POSITION`, `GROUP_POSITION`, `SHARING` and
-    /// `GROUP_SHARING`), version 3 is version 4 without updates (the requests `0x30` to `0x32`,
-    /// `UPDATING`, errors 10 and 11, and `INFO`'s `board` and `release`), version 2 is version 3
-    /// without `SYNCED`'s `news`, version 1 is version 2 without groups, and version 0 is version
-    /// 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 5
+    /// The version this client speaks. Version 5 is this without cards (the settings 5 and 6,
+    /// `SELF`'s `cards` and `card_name`, and the news `CARD` and `CARD_GONE`), version 4 is
+    /// version 5 without positions (the requests `0x33` to `0x35`, error 12, and the news
+    /// `POSITION`, `GROUP_POSITION`, `SHARING` and `GROUP_SHARING`), version 3 is version 4
+    /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
+    /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
+    /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
+    public static let version: UInt8 = 6
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -20,12 +21,15 @@ public enum Companion {
         case 0x20...0x25, 0x45, 0x8A...0x8D: 2
         case 0x30...0x32, 0x46: 4
         case 0x33...0x35, 0x8E...0x91: 5
+        case 0x92...0x93: 6
         default: 0
         }
     }
     public static let maxFrame = 180
     public static let textMax = 128
     public static let nameMax = 31
+    /// The name a node's cards carry, and the one a card held carried.
+    public static let cardNameMax = 31
     public static let regionMax = 15
     public static let firmwareMax = 31
     /// `INFO`'s `board` and `release`.
@@ -159,6 +163,11 @@ public enum Setting: Equatable, Sendable {
     case power(Int8)
     /// 0 to 999999, or 0xFFFFFFFF for a random one each time.
     case passkey(UInt32)
+    /// 1 to send cards, 0 to send none: a node refuses any other value. Only as the user asks.
+    case cards(UInt8)
+    /// The name the node's cards carry, empty for none: the one name a node puts on the air in
+    /// clear. Only as the user asks.
+    case cardName(String)
 
     var number: UInt8 {
         switch self {
@@ -166,6 +175,18 @@ public enum Setting: Equatable, Sendable {
         case .role: 2
         case .power: 3
         case .passkey: 4
+        case .cards: 5
+        case .cardName: 6
+        }
+    }
+
+    /// The least version that defines the setting.
+    public var since: UInt8 { Setting.since(number: number) }
+
+    static func since(number: UInt8) -> UInt8 {
+        switch number {
+        case 5, 6: 6
+        default: 0
         }
     }
 }
@@ -181,13 +202,23 @@ public struct NodeSelf: Equatable, Sendable {
     public var power: Int8
     /// Its clock, in seconds since 1970; 0 if it does not know.
     public var time: UInt32
+    /// 1 if the node sends cards, 0 if not, and the name its cards carry, as `SET` 5 and 6 set
+    /// them. From a `SELF` of version 6 or later: both nil before, when the node has no cards to
+    /// set.
+    public var cards: UInt8?
+    public var cardName: String?
 
-    public init(address: Address, role: UInt8, region: String, power: Int8, time: UInt32) {
+    public init(
+        address: Address, role: UInt8, region: String, power: Int8, time: UInt32, cards: UInt8? = nil,
+        cardName: String? = nil
+    ) {
         self.address = address
         self.role = role
         self.region = region
         self.power = power
         self.time = time
+        self.cards = cards
+        self.cardName = cardName
     }
 }
 
@@ -437,7 +468,22 @@ public struct PositionSharing: Equatable, Sendable {
     public var isOn: Bool { precision != 0 }
 }
 
-/// What a frame says: every frame of version 5.
+/// `CARD`: a card the node holds, one for each address. Who is about.
+public struct Card: Equatable, Sendable {
+    public var address: Address
+    /// Seconds since the node accepted the card, as of the record.
+    public var heard: UInt32
+    /// The name the card carried: a claim its sender made, not a name the user gave. May be empty.
+    public var name: String
+
+    public init(address: Address, heard: UInt32, name: String) {
+        self.address = address
+        self.heard = heard
+        self.name = name
+    }
+}
+
+/// What a frame says: every frame of version 6.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -509,6 +555,10 @@ public enum Body: Equatable, Sendable {
     /// How the node shares its position with `contact`; `PositionSharing.off` once it does not.
     case sharing(contact: Address, PositionSharing)
     case groupSharing(group: GroupID, PositionSharing)
+    /// A card the node holds, from the address in it.
+    case card(Card)
+    /// The node forgot the card it held from `address`.
+    case cardGone(address: Address)
 
     /// The type byte.
     public var type: UInt8 {
@@ -560,6 +610,8 @@ public enum Body: Equatable, Sendable {
         case .groupPosition: 0x8F
         case .sharing: 0x90
         case .groupSharing: 0x91
+        case .card: 0x92
+        case .cardGone: 0x93
         }
     }
 
@@ -613,14 +665,20 @@ public enum Body: Equatable, Sendable {
         case .groupPosition: "GROUP_POSITION"
         case .sharing: "SHARING"
         case .groupSharing: "GROUP_SHARING"
+        case .card: "CARD"
+        case .cardGone: "CARD_GONE"
         }
     }
 }
 
 extension Body {
-    /// The least version that defines this frame: a client sends no request the node's version
-    /// does not define, and reads no frame the version both ends speak does not.
-    public var since: UInt8 { Companion.since(type: type) }
+    /// The least version that defines this frame, and for a `SET` its setting: a client sends no
+    /// request the node's version does not define, and reads no frame the version both ends speak
+    /// does not.
+    public var since: UInt8 {
+        if case let .set(setting) = self { return max(Companion.since(type: type), setting.since) }
+        return Companion.since(type: type)
+    }
 }
 
 public extension UInt8 {
