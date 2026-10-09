@@ -57,6 +57,8 @@ struct PositionMap {
         /// What the camera was fitted to: nil before it was, false when there was nothing to fit
         /// but the world, so that the first position or phone location found is fitted to once more.
         private var fitted: Bool?
+        /// The phone's location was in the last fit: until it is, its first fix is fitted to once.
+        private var fittedPhone = false
 
         func make() -> MKMapView {
             let view = MKMapView()
@@ -103,6 +105,7 @@ struct PositionMap {
             }
             if let phone = view.userLocation.location, view.showsUserLocation {
                 rect = rect.union(MKMapRect(origin: MKMapPoint(phone.coordinate), size: MKMapSize(width: 0, height: 0)))
+                fittedPhone = true
             }
             guard !rect.isNull else {
                 if fitted == nil { view.setVisibleMapRect(.world, animated: false) }
@@ -189,8 +192,9 @@ struct PositionMap {
         }
 
         func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
-            // Nothing to look at before: the phone is something.
-            if fitted == false { fit(mapView) }
+            // Nothing to look at before: the phone is something. And positions fitted to before the
+            // phone's first fix came are fitted to again with it, once.
+            if fitted == false || (fitted == true && !fittedPhone && userLocation.location != nil) { fit(mapView) }
         }
     }
 }
