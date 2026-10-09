@@ -23,7 +23,7 @@ final class CompanionVectorTests: XCTestCase {
 
     func testFramesBuiltReadWrappedAndFound() throws {
         let cases = v["frames"]!.array
-        XCTAssertGreaterThanOrEqual(cases.count, 66)
+        XCTAssertGreaterThanOrEqual(cases.count, 85)
         for c in cases {
             let name = c["type"]!.string
             let frame = Frame(seq: UInt8(c["seq"]!.int), body: try body(name, c["fields"]!.object))
@@ -108,7 +108,7 @@ final class CompanionVectorTests: XCTestCase {
             let version = UInt8(c["version"]!.int)
             for f in c["frames"]!.array {
                 let name = f["type"]!.string
-                // The clients of versions 1, 3 and 4 end with a request their version does not
+                // The clients of versions 1, 3, 4 and 5 end with a request their version does not
                 // define.
                 if let latest = try? Frame.decode(f["frame"]!.bytes), latest.body.since > version {
                     XCTAssertThrowsError(try Frame.decode(f["frame"]!.bytes, version: version), name)
@@ -133,25 +133,30 @@ final class CompanionVectorTests: XCTestCase {
             .info(version: 4, firmware: "tern 0.2.0 heltec-v3", board: nil, release: nil))
     }
 
-    /// Speaking `version`, a frame of a type only a later version defines is of a type this one
-    /// does not: a node answers a request `ERROR` with the code given, and a client ignores news
-    /// and discards an answer, whose code is null.
+    /// Speaking `version`, a frame of a type only a later version defines, or a `SET` of a setting
+    /// only a later one does, is one this version does not define: a node answers a request
+    /// `ERROR` with the code given, and a client ignores news and discards an answer, whose code
+    /// is null.
     func testUnknownToOlder() throws {
         let cases = v["unknown_to_older"]!.array
-        XCTAssertGreaterThanOrEqual(cases.count, 11)
+        XCTAssertGreaterThanOrEqual(cases.count, 15)
         for c in cases {
             let name = c["type"]!.string
             let version = UInt8(c["version"]!.int)
             let bytes = c["frame"]!.bytes
             // The latest version reads it, as what it is.
-            XCTAssertEqual(try Frame.decode(bytes).body.name, name)
-            XCTAssertGreaterThan(Companion.since(type: bytes[0]), version, name)
+            let latest = try Frame.decode(bytes).body
+            XCTAssertEqual(latest.name, name)
+            XCTAssertGreaterThan(latest.since, version, name)
+            // `SET` is as old as the protocol: what the version lacks is its setting.
+            let setting = Companion.since(type: bytes[0]) <= version
+            XCTAssertEqual(setting, name == "SET", name)
             XCTAssertThrowsError(try Frame.decode(bytes, version: version), name) { error in
                 XCTAssertEqual(error as? DecodeError, .undefined, name)
                 let answer: UInt8? = if case .null = c["answer"]! { nil } else { UInt8(c["answer"]!.int) }
                 XCTAssertEqual(Frame.errorCode(for: bytes, .undefined), answer, name)
             }
-            XCTAssertEqual(c["why"]!.string, "a type this version does not define", name)
+            XCTAssertEqual(c["why"]!.string, "a \(setting ? "setting" : "type") this version does not define", name)
 
             // A connection speaking that version, to a node of the latest, ignores the news but
             // counts it, and discards the answer even with the seq of its request: its sync
@@ -202,6 +207,39 @@ final class CompanionVectorTests: XCTestCase {
             XCTAssertThrowsError(try Frame.decode([type, 1], version: 4)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
             XCTAssertThrowsError(try Frame.decode([type, 1], version: 5)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
         }
+        for type: UInt8 in [0x92, 0x93] {
+            XCTAssertEqual(Companion.since(type: type), 6)
+            XCTAssertThrowsError(try Frame.decode([type, 1], version: 5)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+            XCTAssertThrowsError(try Frame.decode([type, 1], version: 6)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
+        }
+    }
+
+    /// Version 6's settings are undefined to version 5 before their values are read, and a
+    /// `SELF` is read by the version spoken: two fields longer from version 6.
+    func testCardsSettingsAndSelfByVersion() throws {
+        for setting: UInt8 in [5, 6] {
+            XCTAssertThrowsError(try Frame.decode([0x05, 1, setting], version: 5)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+            XCTAssertThrowsError(try Frame.decode([0x05, 1, setting], version: 6)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
+        }
+        XCTAssertEqual(Body.set(.cards(1)).since, 6)
+        XCTAssertEqual(Body.set(.cardName("Ada")).since, 6)
+        XCTAssertEqual(Body.set(.role(1)).since, 0)
+        // A value that is neither 0 nor 1 reads: refusing it, with ERROR 3, is the node's to do.
+        XCTAssertEqual(try Frame.decode([0x05, 1, 5, 2]).body, .set(.cards(2)))
+        XCTAssertThrowsError(try Frame(seq: 1, body: .set(.cardName(String(repeating: "x", count: 32)))).encode())
+
+        let me = NodeSelf(address: Address([UInt8](repeating: 9, count: 32))!, role: 1, region: "EU868", power: 14, time: 7)
+        let five = try Frame(seq: 0, body: .nodeSelf(me)).encode()
+        var with = me
+        (with.cards, with.cardName) = (1, "Ada")
+        let six = try Frame(seq: 0, body: .nodeSelf(with)).encode()
+        XCTAssertEqual(six.count, five.count + 2 + 3)
+        XCTAssertEqual(try Frame.decode(five, version: 5).body, .nodeSelf(me))
+        XCTAssertEqual(try Frame.decode(six, version: 6).body, .nodeSelf(with))
+        // Version 6's, read by version 5, is version 5's: the fields after are ignored.
+        XCTAssertEqual(try Frame.decode(six, version: 5).body, .nodeSelf(me))
+        // Version 5's, read by version 6, is cut short.
+        XCTAssertThrowsError(try Frame.decode(five, version: 6)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
     }
 
     func testAFrameThatNeverFinishesIsGivenUpAsText() {
@@ -255,6 +293,8 @@ final class CompanionVectorTests: XCTestCase {
             case 2: return .set(.role(u8("value")))
             case 3: return .set(.power(i8("value")))
             case 4: return .set(.passkey(u32("value")))
+            case 5: return .set(.cards(u8("value")))
+            case 6: return .set(.cardName(str("value")))
             default: throw DecodeError.undefined
             }
         case "SEND": return .send(ref: u32("ref"), to: addr("to"), text: str("text"))
@@ -286,7 +326,8 @@ final class CompanionVectorTests: XCTestCase {
         case "SHARE_GROUP": return .shareGroup(group: gid("group"), sharing())
         case "SELF":
             return .nodeSelf(NodeSelf(
-                address: addr("address"), role: u8("role"), region: str("region"), power: i8("power"), time: u32("time")))
+                address: addr("address"), role: u8("role"), region: str("region"), power: i8("power"), time: u32("time"),
+                cards: f["cards"].map { UInt8($0.int) }, cardName: f["card_name"]?.string))
         case "CONTACT": return .contact(Contact(address: addr("address"), session: u8("session"), name: str("name")))
         case "CONTACT_GONE": return .contactGone(address: addr("address"))
         case "MESSAGE":
@@ -316,6 +357,8 @@ final class CompanionVectorTests: XCTestCase {
         case "GROUP_POSITION": return .groupPosition(group: gid("group"), from: u32("from"), position())
         case "SHARING": return .sharing(contact: addr("contact"), sharing())
         case "GROUP_SHARING": return .groupSharing(group: gid("group"), sharing())
+        case "CARD": return .card(Card(address: addr("address"), heard: u32("heard"), name: str("name")))
+        case "CARD_GONE": return .cardGone(address: addr("address"))
         default: throw DecodeError.undefined
         }
     }

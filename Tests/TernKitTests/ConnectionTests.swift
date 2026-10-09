@@ -20,14 +20,25 @@ final class ConnectionTests: XCTestCase {
         let link = Link(Connection(now: { 0 }, wallTime: { time }))
         let answers = link.replay(frames)
 
-        XCTAssertEqual(answers.count, 15)
-        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 14, "every request answered but one")
-        XCTAssertEqual(answers[12], .failure(.refused(code: ErrorCode.refused)), "a precision past 24")
+        XCTAssertEqual(answers.count, 20)
+        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 18, "every request answered but two")
+        let refused = answers.indices.filter { answers[$0] == .failure(.refused(code: ErrorCode.refused)) }
+        XCTAssertEqual(refused, [12, 17], "a precision past 24, and cards neither on nor off")
         let r = link.connection.records
         XCTAssertEqual(r.me?.region, "EU868")
+        XCTAssertEqual(r.me?.cards, 0, "cards turned on, then off")
+        XCTAssertEqual(r.me?.cardName, "Ada · hut warden", "the name is kept while they are off")
         XCTAssertEqual(r.syncedVersion, Companion.version)
-        XCTAssertEqual(r.contacts.values.map(\.name).sorted(), ["Bob", "Carol"])
-        XCTAssertEqual(r.contacts.values.map(\.session), [0, 0], "Bob's session ended; Carol never had one")
+        XCTAssertEqual(r.contacts.values.map(\.name).sorted(), ["Bob", "Carol", "Dave (trail crew)"])
+        XCTAssertEqual(r.contacts.values.map(\.session), [0, 0, 0], "Bob's session ended; the others never had one")
+        // The card held from the start, and again when its sender was heard; then forgotten. Its
+        // sender was saved under the name the user chose, not the one the card carried.
+        let cards = link.events.compactMap { if case let .news(.card(c)) = $0 { c } else { nil } }
+        XCTAssertEqual(cards.map(\.name), ["Trail crew · ask me", "Trail crew · ask me"])
+        XCTAssertEqual(cards.map(\.heard), [1260, 0])
+        XCTAssertEqual(link.events.filter { if case .news(.cardGone) = $0 { true } else { false } }.count, 1)
+        XCTAssertEqual(r.cards, [:])
+        XCTAssertNotNil(r.contacts[cards[0].address])
         XCTAssertEqual(r.groups.values.map(\.name), ["Ridge walkers"], "the group made was left, the one joined renamed")
         XCTAssertEqual(r.items.keys.sorted(), Array(17...22))
         XCTAssertEqual(r.ordered.filter(\.isUnread), [], "READ marked the message, group message and invite read")
@@ -109,6 +120,48 @@ final class ConnectionTests: XCTestCase {
             XCTAssertEqual(r.sharing, [:])
             XCTAssertEqual(link.events.filter { $0 == .synced }.count, 1)
         }
+    }
+
+    /// A client of version 5 is told of no cards, is sent a `SELF` without `cards` and
+    /// `card_name`, and does not send a setting its version does not define.
+    func testOlderVersion5() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 5 }!
+        let frames = older["frames"]!.array
+        let link = Link(Connection(version: 5, now: { 0 }, wallTime: nil))
+        _ = link.replay(Array(frames.dropLast(2)))
+        XCTAssertEqual(link.connection.agreed, 5)
+        let request = try Frame.decode(frames[frames.count - 2]["frame"]!.bytes).body
+        XCTAssertEqual(request, .set(.cards(1)))
+
+        var result: Result<Body, RequestFailure>?
+        link.connection.submit(request) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        link.connection.submit(.set(.cardName("Ada"))) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(link.out, [])
+        let r = link.connection.records
+        XCTAssertEqual(r.syncedVersion, 5)
+        XCTAssertEqual(r.me?.region, "EU868")
+        XCTAssertNil(r.me?.cards)
+        XCTAssertNil(r.me?.cardName)
+        XCTAssertEqual(r.cards, [:])
+    }
+
+    /// A client of the latest version talking to a node of version 5 does the same, and still
+    /// sets what version 5 defines.
+    func testANodeOfVersion5IsSentNoCardsSetting() throws {
+        let node = Node()
+        node.version = 5
+        node.connection.open()
+        node.answerAll()
+        XCTAssertEqual(node.connection.agreed, 5)
+        var result: Result<Body, RequestFailure>?
+        node.connection.submit(.set(.cards(1))) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(node.sent, [])
+        node.connection.submit(.set(.role(1))) { result = $0 }
+        node.answerAll()
+        XCTAssertEqual(result, .success(.ok))
     }
 
     /// A client of the latest version talking to a node of version 1 does the same.
@@ -496,6 +549,34 @@ final class ConnectionTests: XCTestCase {
         XCTAssertTrue(r.finishSync(version: 5))
         XCTAssertEqual(r.positions, [:])
         XCTAssertEqual(r.groupSharing, [:])
+    }
+
+    /// Cards are a whole list too, from version 6: a sync of version 5 says nothing of them. A
+    /// card is forgotten when the node says so, and not when its sender is saved or removed.
+    func testCardsAreAWholeListFromVersion6() {
+        var r = Records()
+        let card = Card(address: Node.bob, heard: 40, name: "Bob · ask me")
+        r.apply(.card(card))
+        r.apply(.card(Card(address: Node.carol, heard: 9, name: "")))
+        XCTAssertEqual(r.cards[Node.bob], card)
+        r.apply(.card(Card(address: Node.bob, heard: 0, name: "Bob")))
+        XCTAssertEqual(r.cards[Node.bob]?.name, "Bob", "the next from an address replaces the one before")
+        r.apply(.contact(Contact(address: Node.bob, session: 0, name: "Robert")))
+        r.apply(.contactGone(address: Node.bob))
+        XCTAssertEqual(r.cards.count, 2)
+        r.apply(.cardGone(address: Node.carol))
+        XCTAssertEqual(Array(r.cards.keys), [Node.bob])
+
+        r.beginSync()
+        XCTAssertTrue(r.finishSync(version: 5))
+        XCTAssertEqual(Array(r.cards.keys), [Node.bob])
+        r.beginSync()
+        r.apply(.card(Card(address: Node.carol, heard: 3, name: "")))
+        XCTAssertTrue(r.finishSync(version: 6))
+        XCTAssertEqual(Array(r.cards.keys), [Node.carol])
+        r.beginSync()
+        XCTAssertTrue(r.finishSync(version: 6))
+        XCTAssertEqual(r.cards, [:])
     }
 
     /// A record with precision 0 says there is none: the position is forgotten, and sharing is

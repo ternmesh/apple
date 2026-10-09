@@ -59,6 +59,39 @@ final class RecordsFileTests: XCTestCase {
         XCTAssertEqual(Records(decoding: file), r.kept)
     }
 
+    /// Nor are cards: how long ago one was heard counts on, and every sync sends them all.
+    func testCardsAreNotKept() throws {
+        var r = try held()
+        let card = Card(address: Address([UInt8](repeating: 0xB0, count: 32))!, heard: 5, name: "B")
+        r.apply(.card(card))
+        XCTAssertEqual(r.cards.count, 1)
+        XCTAssertEqual(Records(decoding: r.encoded()), r.kept)
+        XCTAssertEqual(r.encoded(), r.kept.encoded())
+        // A file that holds one all the same is read, and it is passed over.
+        let entry = try Frame(seq: 0, body: .card(card)).encode()
+        XCTAssertEqual(Records(decoding: r.encoded() + [UInt8(entry.count)] + entry), r.kept)
+    }
+
+    /// A file written when the client spoke version 5, or kept from a node that does, holds a
+    /// `SELF` without `cards` and `card_name`: it is read, and says nothing of cards.
+    func testASelfOfVersion5IsRead() throws {
+        var r = try held().kept
+        r.syncedVersion = 5
+        r.me?.cards = nil
+        r.me?.cardName = nil
+        let file = r.encoded()
+        let me = try Frame(seq: 0, body: .nodeSelf(r.me!)).encode()
+        XCTAssertEqual(Array(file[11..<12 + me.count]), [UInt8(me.count)] + me, "SELF is the first entry, and ends at time")
+        XCTAssertThrowsError(try Frame.decode(me))
+        let back = Records(decoding: file)
+        XCTAssertEqual(back, r)
+        XCTAssertNil(back.me?.cards)
+        // The next sync asks again from 0, speaking version 6.
+        XCTAssertEqual(back.after(version: 6), 0)
+        // Only SELF is read so: another record cut short still spoils the file.
+        XCTAssertEqual(Records(decoding: Array(file.prefix(11)) + [3, 0x81, 0, 0]), Records())
+    }
+
     func testTheHeader() throws {
         var r = Records()
         XCTAssertEqual(r.encoded(), Array("TRNR".utf8) + [1, 0xFF, 0, 0, 0, 0, 0])
@@ -136,6 +169,7 @@ private extension Records {
         r.groupPositions = [:]
         r.sharing = [:]
         r.groupSharing = [:]
+        r.cards = [:]
         return r
     }
 }
