@@ -9,8 +9,9 @@ What the app is, and why it is native, is in
 [decisions/phone-apps.md](https://github.com/ternmesh/spec/blob/main/decisions/phone-apps.md).
 It finds a node over Bluetooth LE, pairs with it by passkey, and from then on keeps it connected
 whenever it is in range, in the background too: chats with contacts and groups, invites, contacts
-and the addresses the node refused, the node's battery, airtime, neighbours and settings, and
-updates to its firmware from [ternmesh.org](https://ternmesh.org/firmware/).
+and the addresses the node refused, the node's battery, airtime, neighbours and settings,
+positions shared with the node on a map and sharing the user's own, and updates to its firmware
+from [ternmesh.org](https://ternmesh.org/firmware/).
 
 ```bash
 brew install xcodegen && xcodegen && open Tern.xcodeproj   # the app, for iPhone, iPad and Mac
@@ -40,7 +41,7 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 | `Sources/TernKit/Update/Release.swift` | The release manifest at `ternmesh.org/firmware/latest.json`, the image in it for a node's board and region, and Semantic Versioning's order, with the little JSON it needs. |
 | `Sources/TernKit/Update/SHA256.swift` | SHA-256, for an image's digest: TernKit's own, so that it keeps to the standard library. |
 | `Sources/TernKit/Bluetooth/BluetoothLink.swift` | Core Bluetooth: scanning, connecting, pairing, the MTU, a frame to each write and notification, reconnecting to the remembered node, and restoring in the background. Built only where Core Bluetooth is. |
-| `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, and the firmware it downloads and sends), and the Connect, Chats, chat, Contacts and Node screens. |
+| `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, the firmware it downloads and sends, and the phone's position given to the node while it shares, from `LocationFeed`), and the Connect, Chats, chat, Contacts, Map and Node screens, with the share sheet. The map is MapKit's own view (`PositionMap`), which draws a cell before iOS 17 and macOS 14. |
 | `project.yml` | The Xcode project, for XcodeGen: one target for iOS and macOS. |
 | `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, frames of later versions in `unknown_to_older`, and the updater as the client in `update`. The records file, conversations and `READ`'s rule; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
 
@@ -62,14 +63,18 @@ CI runs the tests against the copy, and against the specification's own as it is
 also runs once a week: if the specification changes, that job fails or warns. Copy the new file
 here in the pull request that changes the code to match.
 
+Positions are per [draft/positions.md](https://github.com/ternmesh/spec/blob/main/draft/positions.md),
+with a node of version 5 or later. The Map tab shows each position the node holds at the centre of
+its cell, and the cell itself when it is coarser than a street; a group member's is under the
+group's name and the routing id it claimed. Sharing is turned on only from the share sheet, opened
+from a chat's menu or the map. While the node shares with anyone, the app gives it the phone's
+location, at most every 15 seconds and in the background too, and asks for the permission only
+when the user first shares.
+
 CI builds the app for the iOS simulator and for the Mac, unsigned, as well as testing TernKit.
 
 ## Still to come
 
-* Positions, per [draft/positions.md](https://github.com/ternmesh/spec/blob/main/draft/positions.md).
-  TernKit speaks them (`SET_POSITION`, `SHARE` and `SHARE_GROUP`, and the positions and sharing
-  the node reports, kept in the records), but the app neither gives the node its position nor
-  shows any: no sharing controls and no map yet.
 * Sharing an address by QR code and link, and its short code to compare aloud, per
   [draft/sharing.md](https://github.com/ternmesh/spec/blob/main/draft/sharing.md), which is still
   a strawman.

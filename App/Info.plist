@@ -9,6 +9,12 @@
 	<string>Tern talks to your Tern node over Bluetooth, to send and receive your messages.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Tern reads the QR code on another Tern node or app, to add it as a contact.</string>
+	<!-- Asked only when the user turns on sharing their location with someone. A Mac reads the
+	     second key. -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Tern gives your location to your Tern node, which shares it, rounded to the size you pick, only with the contacts and groups you choose.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Tern gives your location to your Tern node, which shares it, rounded to the size you pick, only with the contacts and groups you choose.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<!-- One scene on iPad too: the model knows one conversation on screen. -->
@@ -18,6 +24,8 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
+		<!-- While the node shares the user's location: a phone sharing is in a pocket. -->
+		<string>location</string>
 	</array>
 </dict>
 </plist>

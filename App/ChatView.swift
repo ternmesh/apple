@@ -1,5 +1,6 @@
 // One conversation: its messages and invites oldest first, what the user sent and where it is,
-// and the composer. What can be done with the contact or the group is in the toolbar.
+// and the composer. What can be done with the contact or the group is in the toolbar, and a line
+// under the title says when the node shares the user's location with them.
 
 import SwiftUI
 import TernKit
@@ -13,6 +14,7 @@ struct ChatView: View {
     @State private var inviting = false
     @State private var leaving = false
     @State private var ending = false
+    @State private var sharingLocation = false
 
     private static let end = "end"
 
@@ -20,6 +22,7 @@ struct ChatView: View {
         let conversation = model.records.conversation(with: peer)
         let pending = model.outgoing.filter { $0.peer == peer }
         VStack(spacing: 0) {
+            sharingLine
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 10) {
@@ -53,6 +56,10 @@ struct ChatView: View {
             Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $inviting) { inviteSheet }
+        .sheet(isPresented: $sharingLocation) {
+            ShareLocationView(peer: peer, current: model.sharing(with: peer))
+                .environmentObject(model)
+        }
         .confirmationDialog("Leave this group?", isPresented: $leaving, titleVisibility: .visible) {
             Button("Leave", role: .destructive) {
                 if case let .group(g) = peer { model.leaveGroup(g) }
@@ -68,6 +75,28 @@ struct ChatView: View {
             Text("Messages waiting for this address are not delivered. A new session starts with the next message either of you sends.")
         }
         .showsProblems()
+    }
+
+    // MARK: Location
+
+    /// While the node shares the user's location with this contact or group: how, and for how
+    /// long. Tapping it changes or stops it.
+    @ViewBuilder
+    private var sharingLine: some View {
+        if model.speaksPositions, let s = model.sharing(with: peer) {
+            Button {
+                sharingLocation = true
+            } label: {
+                Label("Sharing your location · \(PositionWords.sharing(s))", systemImage: "location.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.isConnected)
+            Divider()
+        }
     }
 
     // MARK: Composer
@@ -135,6 +164,10 @@ struct ChatView: View {
                 naming = true
             }
             Button("Copy Address") { copyToClipboard(address.description) }
+            // The node shares only with its contacts.
+            if model.speaksPositions, contact != nil {
+                Button("Share My Location…") { sharingLocation = true }
+            }
             if (model.agreed ?? 0) >= 1 {
                 Button("End Session", role: .destructive) { ending = true }
             }
@@ -155,6 +188,10 @@ struct ChatView: View {
             }
             Button("Invite a Contact") { inviting = true }
                 .disabled(model.records.contacts.isEmpty)
+            // Only while the node holds the group: a left group's conversation stays.
+            if model.speaksPositions, model.records.groups[group] != nil {
+                Button("Share My Location…") { sharingLocation = true }
+            }
             Button("Leave Group", role: .destructive) { leaving = true }
         } label: {
             Label("Group", systemImage: "ellipsis.circle")

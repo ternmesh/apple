@@ -41,8 +41,9 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
-        # The Mac app is sandboxed, with Bluetooth and outgoing connections (for firmware from
-        # ternmesh.org) let through. iOS needs no entitlement for either.
+        # The Mac app is sandboxed, with Bluetooth, outgoing connections (for firmware from
+        # ternmesh.org) and location (for the node to share) let through. iOS needs no entitlement
+        # for any of them.
         "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": App/Tern.entitlements
         ENABLE_HARDENED_RUNTIME: YES
     scheme: {}

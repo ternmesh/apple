@@ -1,4 +1,4 @@
-// The app: one window of the node's conversations, contacts and settings, over one model.
+// The app: one window of the node's conversations, contacts, map and settings, over one model.
 
 import SwiftUI
 import TernKit
@@ -41,6 +41,7 @@ struct RootView: View {
     enum Pane: String, CaseIterable, Identifiable {
         case chats = "Chats"
         case contacts = "Contacts"
+        case map = "Map"
         case node = "Node"
         case connect = "Connect"
 
@@ -50,6 +51,7 @@ struct RootView: View {
             switch self {
             case .chats: "bubble.left.and.bubble.right"
             case .contacts: "person.2"
+            case .map: "map"
             case .node: "antenna.radiowaves.left.and.right"
             case .connect: "dot.radiowaves.left.and.right"
             }
@@ -101,24 +103,28 @@ struct RootView: View {
         switch s {
         case .chats: ChatsView()
         case .contacts: ContactsView()
+        case .map: MapView()
         case .node: NodeView()
         case .connect: ConnectView()
         }
     }
 }
 
-/// A refusal from the node, shown once.
+/// A refusal from the node, shown once; or, with none, something the user should know.
 struct ProblemAlert: ViewModifier {
     @EnvironmentObject private var model: NodeModel
 
     func body(content: Content) -> some View {
-        content.alert(
-            "Could not do that",
-            isPresented: Binding(get: { model.problem != nil }, set: { if !$0 { model.problem = nil } })
+        let title: String = model.problem != nil ? "Could not do that" : "Sharing your location"
+        return content.alert(
+            title,
+            isPresented: Binding(
+                get: { model.problem != nil || model.notice != nil },
+                set: { if !$0 { if model.problem != nil { model.problem = nil } else { model.notice = nil } } })
         ) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(model.problem ?? "")
+            Text(model.problem ?? model.notice ?? "")
         }
     }
 }

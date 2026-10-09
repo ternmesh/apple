@@ -3,6 +3,7 @@
 // they never touch the connection themselves.
 
 import Combine
+import CoreLocation
 import Foundation
 import TernKit
 import UserNotifications
@@ -87,7 +88,12 @@ struct Asked: Identifiable, Equatable {
 
 @MainActor
 final class NodeModel: ObservableObject {
-    @Published private(set) var linkState: BluetoothLink.State = .starting
+    @Published private(set) var linkState: BluetoothLink.State = .starting {
+        didSet {
+            if linkState != .ready { syncedOnThisLink = false }
+            feedPosition()
+        }
+    }
     @Published private(set) var found: [FoundNode] = []
     @Published private(set) var remembered: UUID?
     /// The user disconnected from the remembered node, and the app stays off it until they connect.
@@ -95,7 +101,9 @@ final class NodeModel: ObservableObject {
     /// Every node the app keeps records of, most recently chosen first.
     @Published private(set) var known: [KnownNode] = []
     @Published private(set) var nodeName: String?
-    @Published private(set) var records = Records()
+    @Published private(set) var records = Records() {
+        didSet { feedPosition() }
+    }
     @Published private(set) var conversations: [Conversation] = []
     @Published private(set) var outgoing: [Outgoing] = [] {
         didSet { keepOutgoing() }
@@ -113,9 +121,15 @@ final class NodeModel: ObservableObject {
     private var checkedAgainst: String?
     @Published private(set) var nodeVersion: UInt8?
     /// The version both ends speak, once the node has answered.
-    @Published private(set) var agreed: UInt8?
+    @Published private(set) var agreed: UInt8? {
+        didSet { feedPosition() }
+    }
     /// A refusal or failure to show the user, once.
     @Published var problem: String?
+    /// Something to tell the user that is not a failure, once.
+    @Published var notice: String?
+    /// The user has let the app have their location: the map shows it, and the node is given it.
+    @Published private(set) var locationAllowed = false
     /// The first-run setup was finished, or skipped, for this node.
     @Published private(set) var setUp = true
 
@@ -129,7 +143,12 @@ final class NodeModel: ObservableObject {
     /// becoming active: it starts as the application is, not as active.
     var isActive = NodeModel.launchedActive {
         didSet {
-            if isActive { markRead() } else { save() }
+            if isActive {
+                markRead()
+                location.renew()
+            } else {
+                save()
+            }
         }
     }
 
@@ -150,8 +169,21 @@ final class NodeModel: ObservableObject {
     private var updateNode: UUID?
     private var downloaded: (image: FirmwareImage, bytes: [UInt8])?
     private var firmwareTask: Task<Void, Never>?
+    private let location = LocationFeed()
+    /// The node has synced over the link that is up: the sharing the records hold is the node's
+    /// now, not what it was before the link dropped. The link is ready a moment before its sync's
+    /// records are taken, and sharing that ended meanwhile must not be fed a position.
+    private var syncedOnThisLink = false {
+        didSet { feedPosition() }
+    }
+    /// When the node was last given the phone's position, while the feed runs.
+    private var positionSent: Date?
+    /// The user turned sharing on and was asked for their location: what they answer may need saying.
+    private var askedForLocation = false
     private static let nameKey = "org.ternmesh.tern.nodeName"
     private static let knownKey = "org.ternmesh.tern.known"
+    /// The user was told the node shares only its own fix without the phone's location.
+    private static let toldNoLocationKey = "org.ternmesh.tern.toldNoLocation"
     private static func setupKey(_ id: UUID) -> String { "org.ternmesh.tern.setup.\(id.uuidString)" }
 
     init() {
@@ -181,6 +213,13 @@ final class NodeModel: ObservableObject {
         link.onFound = { [weak self] found in self?.found = found }
         link.onEvent = { [weak self] event in self?.handle(event) }
         linkState = link.state
+        location.onFix = { [weak self] fix in self?.give(fix) }
+        location.onAuthorization = { [weak self] in self?.locationAuthorizationChanged() }
+        locationAllowed = location.isAllowed
+        ticking = Timer.publish(every: 30, on: .main, in: .common).autoconnect().sink { [weak self] now in
+            guard let self, !self.heard.isEmpty else { return }
+            self.clock = now
+        }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
     }
 
@@ -425,6 +464,159 @@ final class NodeModel: ObservableObject {
         return true
     }
 
+    // MARK: Positions
+
+    /// Whether the node speaks positions: version 5 or later. Before it, nothing of them is offered.
+    var speaksPositions: Bool { (agreed ?? 0) >= 5 }
+
+    /// How the node shares its position with `peer`, its minutes counted down from when its record
+    /// came; nil while it does not, or once those minutes have passed.
+    func sharing(with peer: Peer) -> PositionSharing? {
+        let found: (PositionSharing, String)? = switch peer {
+        case let .contact(address): records.sharing[address].map { ($0, "sc:\(address)") }
+        case let .group(group): records.groupSharing[group].map { ($0, "sg:\(group)") }
+        }
+        guard let found else { return nil }
+        var s = found.0
+        if s.minutes > 0 {
+            let gone = Int(clock.timeIntervalSince(heard[found.1] ?? clock) / 60)
+            // Run out: the node has turned it off, though with the link down no record said so.
+            guard gone < Int(s.minutes) else { return nil }
+            s.minutes = UInt16(max(1, Int(s.minutes) - gone))
+        }
+        return s
+    }
+
+    /// `p`, held under `key` as `heard` keys it, its age counted on from when its record came.
+    func counted(_ p: Position, key: String) -> Position {
+        var p = p
+        let since = UInt64(max(0, clock.timeIntervalSince(heard[key] ?? clock)))
+        p.age = UInt32(min(UInt64(p.age) + since, UInt64(UInt32.max)))
+        return p
+    }
+
+    /// The clock positions and sharing are shown against, read every half minute so that ages and
+    /// time left count on while they are on screen.
+    @Published private(set) var clock = Date()
+    private var ticking: AnyCancellable?
+
+    /// When each position and sharing record held arrived: the `age` and `minutes` each gives are
+    /// as of then. Keyed "c:" and an address, "g:" a group and routing id, "sc:" and "sg:" for sharing.
+    private var heard: [String: Date] = [:]
+
+    /// Notes that a position or sharing record arrived now: each one's `age` or `minutes` is as of
+    /// its own frame, so one the same as the record before it still sets the time anew.
+    private func noteArrival(_ body: Body) {
+        let key: String
+        switch body {
+        case let .position(contact, _): key = "c:\(contact)"
+        case let .groupPosition(group, from, _): key = "g:\(group):\(Words.routingId(from))"
+        case let .sharing(contact, _): key = "sc:\(contact)"
+        case let .groupSharing(group, _): key = "sg:\(group)"
+        default: return
+        }
+        heard[key] = Date()
+    }
+
+    /// Forgets the arrival of records no longer held.
+    private func forgetArrivals(_ new: Records) {
+        var keys = Set<String>()
+        keys.formUnion(new.positions.keys.map { "c:\($0)" })
+        keys.formUnion(new.groupPositions.keys.map { "g:\($0.group):\(Words.routingId($0.from))" })
+        keys.formUnion(new.sharing.keys.map { "sc:\($0)" })
+        keys.formUnion(new.groupSharing.keys.map { "sg:\($0)" })
+        heard = heard.filter { keys.contains($0.key) }
+        clock = Date()
+    }
+
+    /// Turns sharing with `peer` on, changes it, or with `PositionSharing.off` turns it off. Only
+    /// ever because the user asked, from the share sheet: the specification says a client never
+    /// does it by itself. Turning it on is when the app first asks for the phone's location.
+    func share(_ s: PositionSharing, with peer: Peer) {
+        switch peer {
+        case let .contact(address): request(.share(contact: address, s))
+        case let .group(group): request(.shareGroup(group: group, s))
+        }
+        guard s.isOn else { return }
+        if location.isUndecided {
+            askedForLocation = true
+            location.ask()
+        } else if !location.isAllowed {
+            tellNoLocation()
+        }
+    }
+
+    /// The node is given the phone's position while it shares with anyone, over a node synced and
+    /// speaking positions, with the user's leave: and not otherwise.
+    private var wantsPosition: Bool {
+        linkState == .ready && syncedOnThisLink && speaksPositions && location.isAllowed
+            && (!records.sharing.isEmpty || !records.groupSharing.isEmpty)
+    }
+
+    /// The least time between two `SET_POSITION`s.
+    private static let fixEvery: TimeInterval = 15
+    /// The oldest last-known location given the node when the feed starts.
+    private static let lastFixMax: TimeInterval = 600
+
+    /// Starts or stops the feed of the phone's position to the node, as `wantsPosition` says, and
+    /// keeps it as exact as the finest sharing needs.
+    private func feedPosition() {
+        guard wantsPosition else {
+            location.stop()
+            positionSent = nil
+            return
+        }
+        let fine = (records.sharing.values.map(\.precision) + records.groupSharing.values.map(\.precision))
+            .contains { $0 >= 20 }
+        let starting = !location.isRunning
+        location.start(fine: fine)
+        // One now, from the last location known if it is recent: the feed's first may be a while.
+        if starting, let last = location.last, -last.timestamp.timeIntervalSinceNow < Self.lastFixMax {
+            give(last)
+        }
+    }
+
+    /// Gives the node the phone's position, at most once each `fixEvery`. Not answered: a refusal
+    /// changes nothing, and the next fix tries again.
+    private func give(_ fix: CLLocation) {
+        guard wantsPosition, let c = link.connection, fix.horizontalAccuracy >= 0,
+              CLLocationCoordinate2DIsValid(fix.coordinate) else { return }
+        if let sent = positionSent, -sent.timeIntervalSinceNow < Self.fixEvery { return }
+        positionSent = Date()
+        let lat = Int32(clamping: Int64((fix.coordinate.latitude * 1e7).rounded()))
+        let lon = Int32(clamping: Int64((fix.coordinate.longitude * 1e7).rounded()))
+        // Above the WGS 84 ellipsoid, as the node's own receiver measures it; -32768 is none.
+        var altitude = Position.noAltitude
+        if fix.verticalAccuracy > 0 {
+            altitude = Int16(max(-32767, min(32767, fix.ellipsoidalAltitude.rounded())))
+        }
+        let accuracy = fix.horizontalAccuracy > 0
+            ? UInt16(min(max(fix.horizontalAccuracy.rounded(.up), 1), 65535)) : 0
+        let age = UInt16(min(max(-fix.timestamp.timeIntervalSinceNow, 0), 65535))
+        c.submit(.setPosition(lat: lat, lon: lon, altitude: altitude, accuracy: accuracy, age: age))
+    }
+
+    private func locationAuthorizationChanged() {
+        locationAllowed = location.isAllowed
+        if location.isAllowed {
+            UserDefaults.standard.removeObject(forKey: Self.toldNoLocationKey)
+        } else if askedForLocation, !location.isUndecided {
+            tellNoLocation()
+        }
+        if !location.isUndecided { askedForLocation = false }
+        feedPosition()
+    }
+
+    /// Says once, until the user allows it, what sharing is without the phone's location.
+    private func tellNoLocation() {
+        guard !UserDefaults.standard.bool(forKey: Self.toldNoLocationKey) else { return }
+        UserDefaults.standard.set(true, forKey: Self.toldNoLocationKey)
+        // After the share sheet has gone: an alert over a sheet on its way out is lost.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            self?.notice = "Without location access the node shares only what its own receiver finds, if it has one."
+        }
+    }
+
     // MARK: Firmware
 
     /// Asks the site for its latest release, and finds the image in it for the node.
@@ -645,11 +837,13 @@ final class NodeModel: ObservableObject {
             } else if !isActive, records.isArrival(body) {
                 notify(body)
             }
+            noteArrival(body)
             take()
             scheduleSave()
         case .synced:
             take()
             save()
+            syncedOnThisLink = true
             nodeSynced()
         case .refused, .gone, .syncRefused:
             break
@@ -659,6 +853,7 @@ final class NodeModel: ObservableObject {
     /// Takes what the connection now holds.
     private func take() {
         guard let c = link.connection else { return }
+        forgetArrivals(c.records)
         records = c.records
         conversations = records.conversations
         setUp = remembered.map { isSetUp($0, self.records) } ?? true
