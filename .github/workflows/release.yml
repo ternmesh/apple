@@ -1,0 +1,63 @@
+name: Release
+
+# A tag `v1.2.3` sends version 1.2.3 to TestFlight, for iOS and for the Mac. Sending a build on to
+# review is done by hand, in App Store Connect.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    name: TestFlight (${{ matrix.platform }})
+    runs-on: macos-26
+    # The App Store Connect key is this environment's, which only a `v*` tag may use.
+    environment: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Nothing is signed for the store until the export, with a certificate Apple keeps: a
+          # signed archive would have each runner make a development certificate of its own.
+          # iOS has no entitlements, so its archive is unsigned.
+          - platform: iOS
+            signing: CODE_SIGNING_ALLOWED=NO
+          # The Mac's is signed ad hoc, which is what carries the sandbox's entitlements to the
+          # export.
+          - platform: macOS
+            signing: CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen
+      # The version is the tag's, and the build number the run's, which only goes up.
+      - name: Archive
+        run: >-
+          xcodebuild archive -project Tern.xcodeproj -scheme Tern
+          -destination 'generic/platform=${{ matrix.platform }}'
+          -archivePath "$RUNNER_TEMP/Tern.xcarchive"
+          MARKETING_VERSION="${GITHUB_REF_NAME#v}"
+          CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
+          ${{ matrix.signing }}
+      - name: Write the App Store Connect key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+      - name: Sign and upload
+        run: >-
+          xcodebuild -exportArchive
+          -archivePath "$RUNNER_TEMP/Tern.xcarchive"
+          -exportOptionsPlist .github/ExportOptions.plist
+          -exportPath "$RUNNER_TEMP/export"
+          -allowProvisioningUpdates
+          -authenticationKeyPath "$RUNNER_TEMP/AuthKey.p8"
+          -authenticationKeyID "$ASC_KEY_ID"
+          -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+      - name: Remove the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
