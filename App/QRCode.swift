@@ -20,9 +20,6 @@ struct QRCodeView: View {
                 .interpolation(.none)
                 .resizable()
                 .scaledToFit()
-                // The light margin ISO/IEC 18004 asks for: four modules, beside the generator's own.
-                .padding(20)
-                .background(Color.white)
                 .frame(maxWidth: 280)
                 .accessibilityLabel("QR code of the link to this address")
         }
@@ -33,7 +30,11 @@ struct QRCodeView: View {
         filter.setValue(Data(text.utf8), forKey: "inputMessage")
         filter.setValue("L", forKey: "inputCorrectionLevel")
         guard let output = filter.outputImage else { return nil }
-        return CIContext().createCGImage(output, from: output.extent)
+        // One pixel a module here, so the light margin ISO/IEC 18004 asks for, four modules, is
+        // four pixels of white round the code, whatever size it is then drawn at.
+        let white = CIImage(color: .white).cropped(to: output.extent.insetBy(dx: -4, dy: -4))
+        let framed = output.composited(over: white)
+        return CIContext().createCGImage(framed, from: framed.extent)
     }
 }
 
@@ -86,6 +87,10 @@ final class ScannerController: UIViewController, AVCaptureMetadataOutputObjectsD
     private var preview: AVCaptureVideoPreviewLayer?
     private let message = UILabel()
     private var done = false
+    /// Gone from the screen: a camera allowed after that is not started.
+    private var gone = false
+    /// Starting and stopping block, so they run off the main thread, one after the other.
+    private let queue = DispatchQueue(label: "org.ternmesh.tern.scanner")
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -110,6 +115,7 @@ final class ScannerController: UIViewController, AVCaptureMetadataOutputObjectsD
     }
 
     private func start() {
+        guard !gone else { return }
         guard let camera = AVCaptureDevice.default(for: .video),
               let input = try? AVCaptureDeviceInput(device: camera),
               session.canAddInput(input)
@@ -129,8 +135,8 @@ final class ScannerController: UIViewController, AVCaptureMetadataOutputObjectsD
         layer.frame = view.bounds
         view.layer.insertSublayer(layer, at: 0)
         preview = layer
-        // Starting the session blocks, so not on the main thread.
-        DispatchQueue.global(qos: .userInitiated).async { self.session.startRunning() }
+        let session = session
+        queue.async { session.startRunning() }
     }
 
     override func viewDidLayoutSubviews() {
@@ -140,8 +146,9 @@ final class ScannerController: UIViewController, AVCaptureMetadataOutputObjectsD
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        gone = true
         let session = session
-        DispatchQueue.global(qos: .userInitiated).async { session.stopRunning() }
+        queue.async { session.stopRunning() }
     }
 
     func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput objects: [AVMetadataObject], from connection: AVCaptureConnection) {
