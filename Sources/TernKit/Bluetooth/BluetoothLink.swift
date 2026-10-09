@@ -139,7 +139,11 @@ public final class BluetoothLink: NSObject {
     /// Connects to a node found by scanning, and remembers it in place of any other.
     public func connect(to id: UUID) {
         if remembered == id, wanted, [.pairing, .opening, .syncing, .ready].contains(state) { return stopScanning() }
-        if let old = peripheral, old.identifier != id { drop(old) }
+        if let old = peripheral, old.identifier != id {
+            drop(old)
+            // Not the node any more: a scan that finds the new one connects only with no peripheral held.
+            peripheral = nil
+        }
         if remembered != id {
             connection?.close()
             connection = nil
