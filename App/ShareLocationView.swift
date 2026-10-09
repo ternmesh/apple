@@ -27,10 +27,13 @@ struct ShareLocationView: View {
         _altitude = State(initialValue: (current?.fields ?? 0) & PositionSharing.altitude != 0)
         _accuracy = State(initialValue: (current?.fields ?? 0) & PositionSharing.accuracy != 0)
         _interval = State(initialValue: current?.interval ?? (toGroup ? 900 : 300))
-        // Minutes left are not a duration to ask for again: on until stopped stays so, and the rest
-        // start an hour from now.
-        _minutes = State(initialValue: current.map { $0.minutes == 0 ? UInt16(0) : 60 } ?? 60)
+        // Sharing that ends keeps what it has left unless the user picks another duration, so a
+        // change of precision alone does not change when it stops.
+        _minutes = State(initialValue: current.map { $0.minutes == 0 ? UInt16(0) : Self.asNow } ?? 60)
     }
+
+    /// The duration that keeps the minutes sharing has left, offered while it has some.
+    private static let asNow = UInt16.max
 
     /// The five precisions the specification asks a client to offer, by what each covers.
     static let precisions: [UInt8] = [8, 12, 16, 20, 24]
@@ -79,6 +82,9 @@ struct ShareLocationView: View {
                 }
                 SwiftUI.Section("For how long") {
                     Picker("For how long", selection: $minutes) {
+                        if let current, current.minutes != 0 {
+                            Text("As now (\(PositionWords.left(current.minutes)))").tag(Self.asNow)
+                        }
                         Text("1 hour").tag(UInt16(60))
                         Text("8 hours").tag(UInt16(480))
                         Text("Until I stop").tag(UInt16(0))
@@ -135,6 +141,7 @@ struct ShareLocationView: View {
             if altitude { fields |= PositionSharing.altitude }
             if accuracy { fields |= PositionSharing.accuracy }
         }
+        let minutes = self.minutes == Self.asNow ? current?.minutes ?? 60 : self.minutes
         return PositionSharing(precision: precision, fields: fields, interval: interval, minutes: minutes)
     }
 }
