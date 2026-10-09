@@ -107,18 +107,21 @@ struct RootView: View {
     }
 }
 
-/// A refusal from the node, shown once.
+/// A refusal from the node, shown once; or, with none, something the user should know.
 struct ProblemAlert: ViewModifier {
     @EnvironmentObject private var model: NodeModel
 
     func body(content: Content) -> some View {
-        content.alert(
-            "Could not do that",
-            isPresented: Binding(get: { model.problem != nil }, set: { if !$0 { model.problem = nil } })
+        let title: String = model.problem != nil ? "Could not do that" : "Sharing your location"
+        return content.alert(
+            title,
+            isPresented: Binding(
+                get: { model.problem != nil || model.notice != nil },
+                set: { if !$0 { if model.problem != nil { model.problem = nil } else { model.notice = nil } } })
         ) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(model.problem ?? "")
+            Text(model.problem ?? model.notice ?? "")
         }
     }
 }
