@@ -58,6 +58,7 @@ public enum Words {
         case ErrorCode.notHeld: "The node does not hold that group or invite."
         case ErrorCode.notThere: "The node is not where the update was."
         case ErrorCode.notAnImage: "That is not firmware this node runs."
+        case ErrorCode.notAContact: "That address is not one of the node's contacts."
         default: "The node refused (\(code))."
         }
     }

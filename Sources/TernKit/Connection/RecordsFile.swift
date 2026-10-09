@@ -10,6 +10,10 @@
 //   then  entries to the end: a length byte n, then n bytes of a frame with seq 0, encoded at
 //         Companion.version. SELF, every CONTACT, every GROUP, every MESSAGE, GROUP_MESSAGE and
 //         INVITE in id order, every NEIGHBOUR, then AIRTIME and POWER, each only if held.
+//
+// Positions and sharing are not kept. A position's age and sharing's minutes left are as of when
+// the record was sent, so on disk they only grow wrong, and every sync sends both whole again. A
+// file that holds them all the same is read, and they are passed over.
 
 extension Records {
     static let fileMagic: [UInt8] = Array("TRNR".utf8)
@@ -68,9 +72,9 @@ extension Records {
             at += 1
             guard at + n <= bytes.count,
                   let frame = try? Frame.decode(Array(bytes[at..<at + n])),
-                  frame.body.isRecord
+                  frame.body.isRecord || frame.body.isFleeting
             else { return }
-            r.apply(frame.body)
+            if frame.body.isRecord { r.apply(frame.body) }
             at += n
         }
         r.syncedVersion = bytes[5] == 0xFF ? nil : bytes[5]
@@ -86,6 +90,14 @@ extension Body {
     var isRecord: Bool {
         switch self {
         case .nodeSelf, .contact, .group, .message, .groupMessage, .invite, .neighbour, .airtime, .power: true
+        default: false
+        }
+    }
+
+    /// A record whose numbers count on from when it was sent: one the file does not keep.
+    var isFleeting: Bool {
+        switch self {
+        case .position, .groupPosition, .sharing, .groupSharing: true
         default: false
         }
     }

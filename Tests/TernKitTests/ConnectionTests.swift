@@ -20,8 +20,9 @@ final class ConnectionTests: XCTestCase {
         let link = Link(Connection(now: { 0 }, wallTime: { time }))
         let answers = link.replay(frames)
 
-        XCTAssertEqual(answers.count, 11)
-        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 11, "every request answered")
+        XCTAssertEqual(answers.count, 15)
+        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 14, "every request answered but one")
+        XCTAssertEqual(answers[12], .failure(.refused(code: ErrorCode.refused)), "a precision past 24")
         let r = link.connection.records
         XCTAssertEqual(r.me?.region, "EU868")
         XCTAssertEqual(r.syncedVersion, Companion.version)
@@ -34,6 +35,13 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(r.items[20]?.state, MessageState.sent)
         XCTAssertEqual(r.neighbours.count, 1)
         XCTAssertEqual(link.events.filter { if case .news(.asked) = $0 { true } else { false } }.count, 1)
+        let bob = try XCTUnwrap(r.contacts.values.first { $0.name == "Bob" }).address
+        XCTAssertEqual(Array(r.positions.keys), [bob])
+        XCTAssertEqual(r.positions[bob]?.precision, 16)
+        XCTAssertEqual(r.positions[bob]?.altitude, Position.noAltitude)
+        XCTAssertEqual(r.sharing, [:], "sharing with Bob turned on, then off")
+        XCTAssertEqual(r.groupSharing, [:], "sharing with the group refused")
+        XCTAssertEqual(r.groupPositions, [:])
     }
 
     /// A client of version 0 that holds messages through 17 asks only for those after them, and
@@ -76,6 +84,31 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(link.connection.agreed, 2)
         XCTAssertEqual(link.events.filter { $0 == .synced }.count, 1)
         XCTAssertEqual(link.connection.records.syncedVersion, 2)
+    }
+
+    /// Clients of versions 3 and 4 are told of no positions and no sharing, and do not send a
+    /// request their version does not define.
+    func testOlderVersions3And4() throws {
+        for (version, last) in [(UInt8(3), "UPDATE_BEGIN"), (4, "SHARE")] {
+            let older = v["older"]!.array.first { $0["version"]!.int == Int(version) }!
+            let frames = older["frames"]!.array
+            let link = Link(Connection(version: version, now: { 0 }, wallTime: nil))
+            _ = link.replay(Array(frames.dropLast(2)))
+            XCTAssertEqual(frames[frames.count - 2]["type"]!.string, last)
+            XCTAssertEqual(link.connection.agreed, version)
+            XCTAssertEqual(link.connection.board, version >= 4 ? "heltec-v3" : nil)
+
+            var result: Result<Body, RequestFailure>?
+            let request = try Frame.decode(frames[frames.count - 2]["frame"]!.bytes).body
+            link.connection.submit(request) { result = $0 }
+            XCTAssertEqual(result, .failure(.unsupported), "\(version)")
+            XCTAssertEqual(link.out, [])
+            let r = link.connection.records
+            XCTAssertEqual(r.syncedVersion, version)
+            XCTAssertEqual(r.positions, [:])
+            XCTAssertEqual(r.sharing, [:])
+            XCTAssertEqual(link.events.filter { $0 == .synced }.count, 1)
+        }
     }
 
     /// A client of the latest version talking to a node of version 1 does the same.
@@ -449,6 +482,92 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(r.groups, [:])
     }
 
+    /// Records kept from a version 5 connection, synced with a node that speaks an earlier
+    /// version, keep their positions and sharing: that sync could not have sent them.
+    func testASyncOfAnEarlierVersionKeepsPositionsAndSharing() {
+        var r = Records()
+        r.apply(.position(contact: Node.bob, Node.position))
+        r.apply(.groupSharing(group: Node.hut, Node.sharing))
+        r.beginSync()
+        XCTAssertTrue(r.finishSync(version: 4))
+        XCTAssertEqual(Array(r.positions.keys), [Node.bob])
+        XCTAssertEqual(Array(r.groupSharing.keys), [Node.hut])
+        r.beginSync()
+        XCTAssertTrue(r.finishSync(version: 5))
+        XCTAssertEqual(r.positions, [:])
+        XCTAssertEqual(r.groupSharing, [:])
+    }
+
+    /// A record with precision 0 says there is none: the position is forgotten, and sharing is
+    /// off. A contact removed, or a group left, takes its positions and sharing with it.
+    func testPrecision0AndGoneForgetPositionsAndSharing() {
+        var r = Records()
+        let member = GroupMember(group: Node.hut, from: 7)
+        r.apply(.position(contact: Node.bob, Node.position))
+        r.apply(.groupPosition(group: Node.hut, from: 7, Node.position))
+        r.apply(.sharing(contact: Node.bob, Node.sharing))
+        r.apply(.groupSharing(group: Node.hut, Node.sharing))
+        XCTAssertEqual(r.positions[Node.bob], Node.position)
+        XCTAssertEqual(r.groupPositions[member], Node.position)
+        XCTAssertEqual(r.sharing[Node.bob], Node.sharing)
+        XCTAssertEqual(r.groupSharing[Node.hut], Node.sharing)
+
+        r.apply(.position(contact: Node.bob, .notHeld))
+        r.apply(.sharing(contact: Node.bob, .off))
+        XCTAssertEqual(r.positions, [:])
+        XCTAssertEqual(r.sharing, [:])
+
+        r.apply(.position(contact: Node.bob, Node.position))
+        r.apply(.sharing(contact: Node.bob, Node.sharing))
+        r.apply(.contactGone(address: Node.bob))
+        XCTAssertEqual(r.positions, [:])
+        XCTAssertEqual(r.sharing, [:])
+        r.apply(.groupGone(group: Node.hut))
+        XCTAssertEqual(r.groupPositions, [:])
+        XCTAssertEqual(r.groupSharing, [:])
+    }
+
+    /// Positions and sharing are whole lists, as contacts are, and only from a sync that missed
+    /// nothing.
+    func testASyncIsTheWholeListOfPositionsAndSharing() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerOne()
+        node.answerOne()
+        _ = node.sent.removeFirst()
+        node.news(.position(contact: Node.bob, Node.position))
+        node.news(.position(contact: Node.carol, Node.position))
+        node.news(.groupPosition(group: Node.hut, from: 7, Node.position))
+        node.news(.sharing(contact: Node.bob, Node.sharing))
+        node.news(.groupSharing(group: Node.hut, Node.sharing))
+        node.answerSync()
+        var r = node.connection.records
+        XCTAssertEqual(r.positions.count, 2)
+        XCTAssertEqual(r.groupPositions.count, 1)
+
+        // A sync that missed news forgets nothing.
+        node.connection.resync()
+        _ = node.sent.removeFirst()
+        node.newsCount &+= 1
+        node.news(.position(contact: Node.carol, Node.position))
+        node.answerSync()
+        r = node.connection.records
+        XCTAssertEqual(r.positions.count, 2)
+        XCTAssertEqual(r.sharing.count, 1)
+        XCTAssertEqual(r.groupSharing.count, 1)
+
+        // The one after it forgets what it did not send: sharing it does not send is off.
+        _ = node.sent.removeFirst()
+        node.news(.position(contact: Node.carol, Node.position))
+        node.news(.sharing(contact: Node.bob, Node.sharing))
+        node.answerSync()
+        r = node.connection.records
+        XCTAssertEqual(Array(r.positions.keys), [Node.carol])
+        XCTAssertEqual(r.groupPositions, [:])
+        XCTAssertEqual(Array(r.sharing.keys), [Node.bob])
+        XCTAssertEqual(r.groupSharing, [:])
+    }
+
     func testNewsOfATypeThisClientDoesNotKnowIsCountedAndIgnored() throws {
         let node = Node()
         node.connection.open()
@@ -662,6 +781,9 @@ private final class Node {
         while !sent.isEmpty { asked.append(answerOne()) }
         return asked
     }
+
+    static let position = Position(precision: 16, lat: 603_945_922, lon: 52_871_704, altitude: 12, accuracy: 0, age: 40)
+    static let sharing = PositionSharing(precision: 20, fields: 1, interval: 900, minutes: 60)
 
     static func message(id: UInt32, state: UInt8) -> Message {
         Message(id: id, contact: bob, time: 0, flags: 0, state: state, reason: 0, wait: 0, text: "x")

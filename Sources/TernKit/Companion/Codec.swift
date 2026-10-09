@@ -1,5 +1,5 @@
-// Building and reading frames, field by field: big-endian numbers, 32-byte addresses and digests,
-// and text and bytes as a length byte then the bytes.
+// Building and reading frames, field by field: big-endian numbers, signed ones in two's
+// complement, 32-byte addresses and digests, and text and bytes as a length byte then the bytes.
 
 /// Why a frame was not built. These are the caller's mistakes, not the wire's.
 public enum EncodeError: Error, Equatable {
@@ -80,6 +80,25 @@ extension Frame {
             try w.blob(data, limit: Companion.updateChunk, field: "data")
         case let .updating(offset):
             w.u32(offset)
+        case let .setPosition(lat, lon, altitude, accuracy, age):
+            w.i32(lat)
+            w.i32(lon)
+            w.i16(altitude)
+            w.u16(accuracy)
+            w.u16(age)
+        case let .share(contact, s), let .sharing(contact, s):
+            w.addr(contact)
+            w.sharing(s)
+        case let .shareGroup(group, s), let .groupSharing(group, s):
+            w.gid(group)
+            w.sharing(s)
+        case let .position(contact, p):
+            w.addr(contact)
+            w.position(p)
+        case let .groupPosition(group, from, p):
+            w.gid(group)
+            w.u32(from)
+            w.position(p)
         case let .error(code):
             w.u8(code)
         case let .info(version, firmware, board, release):
@@ -201,6 +220,11 @@ extension Frame {
         case 0x30: body = .updateBegin(size: try r.u32(), digest: try r.digest())
         case 0x31: body = .updateData(offset: try r.u32(), data: try r.blob(limit: Companion.updateChunk))
         case 0x32: body = .updateEnd
+        case 0x33:
+            body = .setPosition(
+                lat: try r.i32(), lon: try r.i32(), altitude: try r.i16(), accuracy: try r.u16(), age: try r.u16())
+        case 0x34: body = .share(contact: try r.addr(), try r.sharing())
+        case 0x35: body = .shareGroup(group: try r.gid(), try r.sharing())
         case 0x40: body = .ok
         case 0x41: body = .error(code: try r.u8())
         case 0x42:
@@ -249,6 +273,10 @@ extension Frame {
             body = .invite(Invite(
                 id: try r.u32(), contact: try r.addr(), group: try r.gid(), time: try r.u32(), flags: try r.u8(),
                 state: try r.u8(), reason: try r.u8(), wait: try r.u16(), name: try r.str(limit: Companion.nameMax)))
+        case 0x8E: body = .position(contact: try r.addr(), try r.position())
+        case 0x8F: body = .groupPosition(group: try r.gid(), from: try r.u32(), try r.position())
+        case 0x90: body = .sharing(contact: try r.addr(), try r.sharing())
+        case 0x91: body = .groupSharing(group: try r.gid(), try r.sharing())
         default: throw DecodeError.undefined
         }
         return Frame(seq: bytes[1], body: body)
@@ -272,8 +300,26 @@ struct Writer {
     mutating func u8(_ v: UInt8) { bytes.append(v) }
     mutating func i8(_ v: Int8) { bytes.append(UInt8(bitPattern: v)) }
     mutating func u16(_ v: UInt16) { bytes += [UInt8(v >> 8), UInt8(v & 0xFF)] }
+    mutating func i16(_ v: Int16) { u16(UInt16(bitPattern: v)) }
     mutating func u32(_ v: UInt32) {
         bytes += [UInt8(v >> 24), UInt8(v >> 16 & 0xFF), UInt8(v >> 8 & 0xFF), UInt8(v & 0xFF)]
+    }
+    mutating func i32(_ v: Int32) { u32(UInt32(bitPattern: v)) }
+    /// `SHARE`'s and `SHARING`'s fields after the contact or group.
+    mutating func sharing(_ s: PositionSharing) {
+        u8(s.precision)
+        u8(s.fields)
+        u16(s.interval)
+        u16(s.minutes)
+    }
+    /// `POSITION`'s and `GROUP_POSITION`'s fields after the sender.
+    mutating func position(_ p: Position) {
+        u8(p.precision)
+        i32(p.lat)
+        i32(p.lon)
+        i16(p.altitude)
+        u8(p.accuracy)
+        u32(p.age)
     }
     mutating func addr(_ a: Address) { bytes += a.bytes }
     mutating func gid(_ g: GroupID) { bytes += g.bytes }
@@ -304,7 +350,15 @@ struct Reader {
     mutating func u8() throws -> UInt8 { try take(1).first! }
     mutating func i8() throws -> Int8 { Int8(bitPattern: try u8()) }
     mutating func u16() throws -> UInt16 { try take(2).reduce(0) { $0 << 8 | UInt16($1) } }
+    mutating func i16() throws -> Int16 { Int16(bitPattern: try u16()) }
     mutating func u32() throws -> UInt32 { try take(4).reduce(0) { $0 << 8 | UInt32($1) } }
+    mutating func i32() throws -> Int32 { Int32(bitPattern: try u32()) }
+    mutating func sharing() throws -> PositionSharing {
+        PositionSharing(precision: try u8(), fields: try u8(), interval: try u16(), minutes: try u16())
+    }
+    mutating func position() throws -> Position {
+        Position(precision: try u8(), lat: try i32(), lon: try i32(), altitude: try i16(), accuracy: try u8(), age: try u32())
+    }
     mutating func addr() throws -> Address { Address(Array(try take(Address.length)))! }
     mutating func gid() throws -> GroupID { GroupID(Array(try take(GroupID.length)))! }
     mutating func digest() throws -> Digest { Digest(Array(try take(Digest.length)))! }

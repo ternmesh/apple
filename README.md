@@ -28,12 +28,12 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 4, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 5, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Connection/Connection.swift` | One connection, the client's half: `HELLO` and the version both speak, one request at a time, counted news, syncing again, and the `PING` that keeps a node from taking the app for gone. No I/O and no clock of its own: a link hands it frames and calls `tick()`. |
-| `Sources/TernKit/Connection/Records.swift` | What the node has said it holds, as news leaves it, and the `after` the next sync asks from. |
-| `Sources/TernKit/Connection/RecordsFile.swift` | The records on disk: a short header, then each record as the frame that carried it. The Android app writes the same bytes. |
+| `Sources/TernKit/Connection/Records.swift` | What the node has said it holds, as news leaves it, positions and sharing included, and the `after` the next sync asks from. |
+| `Sources/TernKit/Connection/RecordsFile.swift` | The records on disk: a short header, then each record as the frame that carried it, but for positions and sharing, which every sync sends again. The Android app writes the same bytes. |
 | `Sources/TernKit/Connection/Conversations.swift` | The records as conversations, with what is unread; the `through` a `READ` may go to without marking another conversation's; and what is new enough to notify of. |
 | `Sources/TernKit/Connection/Words.swift` | The protocol's numbers in words: states, reasons, refusals, roles, how an update ended. |
 | `Sources/TernKit/Update/Updater.swift` | One firmware image sent to a node: `UPDATE_BEGIN`, on from the offset the node gives, `UPDATE_DATA` a chunk at a time, `UPDATE_END`, and going on after the link drops. Through the connection, with no I/O of its own. |
@@ -42,7 +42,7 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 | `Sources/TernKit/Bluetooth/BluetoothLink.swift` | Core Bluetooth: scanning, connecting, pairing, the MTU, a frame to each write and notification, reconnecting to the remembered node, and restoring in the background. Built only where Core Bluetooth is. |
 | `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, and the firmware it downloads and sends), and the Connect, Chats, chat, Contacts and Node screens. |
 | `project.yml` | The Xcode project, for XcodeGen: one target for iOS and macOS. |
-| `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, and the updater as the client in `update`. The records file, conversations and `READ`'s rule; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
+| `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, frames of later versions in `unknown_to_older`, and the updater as the client in `update`. The records file, conversations and `READ`'s rule; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
 
 The vectors' `group_ids` are not run here. A client never holds a group's secret, since no frame
 carries one, so working out an id from it is the node's part. Nor is `refusals` run as a
@@ -66,6 +66,10 @@ CI builds the app for the iOS simulator and for the Mac, unsigned, as well as te
 
 ## Still to come
 
+* Positions, per [draft/positions.md](https://github.com/ternmesh/spec/blob/main/draft/positions.md).
+  TernKit speaks them (`SET_POSITION`, `SHARE` and `SHARE_GROUP`, and the positions and sharing
+  the node reports, kept in the records), but the app neither gives the node its position nor
+  shows any: no sharing controls and no map yet.
 * Sharing an address by QR code and link, and its short code to compare aloud, per
   [draft/sharing.md](https://github.com/ternmesh/spec/blob/main/draft/sharing.md), which is still
   a strawman.
