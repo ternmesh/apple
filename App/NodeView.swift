@@ -23,7 +23,7 @@ struct NodeView: View {
         ("MY919", "Malaysia"),
         ("NZ915", "New Zealand"),
         ("RU868", "Russia"),
-        ("TH920", "Thailand: set the power to at least 17 dBm radiated first"),
+        ("TH920", "Thailand: the node raises its power to 17 dBm radiated if it is lower"),
         ("US915", "The United States, Canada, Mexico, Brazil, Argentina and Peru"),
     ]
 
