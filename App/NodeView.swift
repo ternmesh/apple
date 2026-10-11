@@ -17,9 +17,14 @@ struct NodeView: View {
     /// not have.
     static let regions: [(name: String, detail: String)] = [
         ("AU915", "Australia"),
-        ("EU868", "Europe and the UK"),
+        ("CL915", "Chile"),
+        ("EU868", "Europe, the UK, Ukraine and South Africa"),
+        ("KZ863", "Kazakhstan"),
+        ("MY919", "Malaysia"),
         ("NZ915", "New Zealand"),
-        ("US915", "The United States, Canada and Mexico"),
+        ("RU868", "Russia"),
+        ("TH920", "Thailand: the node raises its power to 17 dBm radiated if it is lower"),
+        ("US915", "The United States, Canada, Mexico, Brazil, Argentina and Peru"),
     ]
 
     var body: some View {
