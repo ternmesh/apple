@@ -53,9 +53,10 @@ struct SetupView: View {
 
     private func region(_ me: NodeSelf) -> some View {
         SwiftUI.Section {
-            choice("EU868", detail: "Europe and the UK", selected: me.region == "EU868") { model.set(.region("EU868")) }
-            choice("US915", detail: "The United States, Canada and Mexico", selected: me.region == "US915") {
-                model.set(.region("US915"))
+            ForEach(NodeView.regions, id: \.name) { region in
+                choice(region.name, detail: region.detail, selected: me.region == region.name) {
+                    model.set(.region(region.name))
+                }
             }
         } header: {
             Text("Where are you?")

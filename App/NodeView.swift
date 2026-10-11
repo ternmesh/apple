@@ -13,8 +13,14 @@ struct NodeView: View {
     @State private var confirmingCards = false
     @State private var confirmingUpdate: FirmwareOffer?
 
-    /// The profiles a node is set to by name. A node refuses one it does not have.
-    private static let regions = ["US915", "EU868"]
+    /// The profiles a node is set to by name, each with where it is for. A node refuses one it does
+    /// not have.
+    static let regions: [(name: String, detail: String)] = [
+        ("AU915", "Australia"),
+        ("EU868", "Europe and the UK"),
+        ("NZ915", "New Zealand"),
+        ("US915", "The United States, Canada and Mexico"),
+    ]
 
     var body: some View {
         NavigationStack {
@@ -119,10 +125,10 @@ struct NodeView: View {
     private func settings(_ me: NodeSelf) -> some View {
         SwiftUI.Section {
             Picker("Region", selection: Binding(get: { me.region }, set: { model.set(.region($0)) })) {
-                if !Self.regions.contains(me.region) {
+                if !Self.regions.contains(where: { $0.name == me.region }) {
                     Text(me.region.isEmpty ? "Not set" : me.region).tag(me.region)
                 }
-                ForEach(Self.regions, id: \.self) { Text($0).tag($0) }
+                ForEach(Self.regions, id: \.name) { Text($0.name).tag($0.name) }
             }
             // An image is for one region, and a new region restarts the node: not while one is on its way.
             .disabled(model.firmwareStatus.isTransferring)
