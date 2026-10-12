@@ -46,6 +46,7 @@ extension Frame {
             case let .passkey(key): w.u32(key)
             case let .cards(on): w.u8(on)
             case let .cardName(name): try w.str(name, limit: Companion.cardNameMax, field: "card name")
+            case let .receiver(on): w.u8(on)
             }
         case let .send(ref, to, text):
             w.u32(ref)
@@ -191,6 +192,15 @@ extension Frame {
             w.addr(c.address)
             w.u32(c.heard)
             try w.str(c.name, limit: Companion.cardNameMax, field: "name")
+        case let .fix(f):
+            w.u8(f.receiver)
+            w.u8(f.source)
+            w.i32(f.lat)
+            w.i32(f.lon)
+            w.i16(f.altitude)
+            w.u16(f.accuracy)
+            w.u32(f.age)
+            w.u8(f.satellites)
         }
         guard w.bytes.count <= Companion.maxFrame else { throw EncodeError.frameTooLong(w.bytes.count) }
         return w.bytes
@@ -222,6 +232,7 @@ extension Frame {
             case 4: body = .set(.passkey(try r.u32()))
             case 5: body = .set(.cards(try r.u8()))
             case 6: body = .set(.cardName(try r.str(limit: Companion.cardNameMax)))
+            case 7: body = .set(.receiver(try r.u8()))
             default: throw DecodeError.undefined
             }
         case 0x10:
@@ -308,6 +319,11 @@ extension Frame {
         case 0x92:
             body = .card(Card(address: try r.addr(), heard: try r.u32(), name: try r.str(limit: Companion.cardNameMax)))
         case 0x93: body = .cardGone(address: try r.addr())
+        case 0x94:
+            body = .fix(NodeFix(
+                receiver: try r.u8(), source: try r.u8(), lat: try r.i32(), lon: try r.i32(), altitude: try r.i16(),
+                accuracy: try r.u16(), age: try r.u32(), satellites: try r.u8()
+            ))
         default: throw DecodeError.undefined
         }
         return Frame(seq: bytes[1], body: body)

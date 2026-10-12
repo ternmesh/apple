@@ -257,6 +257,26 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertThrowsError(try Frame.decode(five, version: 6)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
     }
 
+    /// The node's own fix and the receiver setting are version 8's; a fix is 21 bytes, and its
+    /// signed fields read back at their ends.
+    func testTheNodesOwnFixIsVersion8s() throws {
+        XCTAssertThrowsError(try Frame.decode([0x05, 1, 7], version: 7)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertThrowsError(try Frame.decode([0x05, 1, 7], version: 8)) { XCTAssertEqual($0 as? DecodeError, .malformed) }
+        XCTAssertEqual(Body.set(.receiver(0)).since, 8)
+        // A value that is neither 0 nor 1 reads: refusing it, with ERROR 3, is the node's to do.
+        XCTAssertEqual(try Frame.decode([0x05, 1, 7, 2]).body, .set(.receiver(2)))
+
+        let south = NodeFix(
+            receiver: NodeFix.fixed, source: NodeFix.fromReceiver, lat: -900_000_000, lon: -1_800_000_000,
+            altitude: Position.noAltitude, accuracy: .max, age: .max, satellites: .max)
+        let bytes = try Frame(seq: 0, body: .fix(south)).encode()
+        XCTAssertEqual(bytes.count, 21)
+        XCTAssertEqual(try Frame.decode(bytes).body, .fix(south))
+        XCTAssertTrue(south.has)
+        XCTAssertThrowsError(try Frame.decode(bytes, version: 7)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertThrowsError(try Frame.decode(Array(bytes.prefix(20)))) { XCTAssertEqual($0 as? DecodeError, .malformed) }
+    }
+
     func testAFrameThatNeverFinishesIsGivenUpAsText() {
         var r = StreamReader()
         XCTAssertEqual(r.push(Hex.decode("f554000240")!), [])
@@ -310,6 +330,7 @@ final class CompanionVectorTests: XCTestCase {
             case 4: return .set(.passkey(u32("value")))
             case 5: return .set(.cards(u8("value")))
             case 6: return .set(.cardName(str("value")))
+            case 7: return .set(.receiver(u8("value")))
             default: throw DecodeError.undefined
             }
         case "SEND": return .send(ref: u32("ref"), to: addr("to"), text: str("text"))
@@ -377,6 +398,10 @@ final class CompanionVectorTests: XCTestCase {
         case "GROUP_SHARING": return .groupSharing(group: gid("group"), sharing())
         case "CARD": return .card(Card(address: addr("address"), heard: u32("heard"), name: str("name")))
         case "CARD_GONE": return .cardGone(address: addr("address"))
+        case "FIX":
+            return .fix(NodeFix(
+                receiver: u8("receiver"), source: u8("source"), lat: i32("lat"), lon: i32("lon"),
+                altitude: i16("altitude"), accuracy: u16("accuracy"), age: u32("age"), satellites: u8("satellites")))
         default: throw DecodeError.undefined
         }
     }

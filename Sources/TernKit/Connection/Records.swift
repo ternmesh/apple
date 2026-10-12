@@ -1,7 +1,8 @@
 // What a client holds of a node: the records its news gave, kept as the specification's "What the
 // node holds" says. A record replaces the one before it; STATE changes a message in place; a sync
 // is the whole list of contacts, groups, neighbours, positions, sharing and cards, but not of
-// messages.
+// messages; and a sync of version 8 sends a FIX, which replaces the one before it as AIRTIME and
+// POWER do.
 
 /// A message, group message or invite: the three records that share the node's count of `id`s,
 /// and a message's states.
@@ -96,6 +97,8 @@ public struct Records: Equatable, Sendable {
     public var cards: [Address: Card] = [:]
     public var airtime: Airtime?
     public var power: Power?
+    /// The node's own fix and its satellite receiver; nil before a node of version 8 has said.
+    public var fix: NodeFix?
     /// The version both ends spoke at the last sync that finished, nil if none has. A node may
     /// hold records a client of an earlier version was never sent, under `id`s below ones it was.
     public var syncedVersion: UInt8?
@@ -124,7 +127,7 @@ public struct Records: Equatable, Sendable {
         a.me == b.me && a.contacts == b.contacts && a.groups == b.groups && a.items == b.items
             && a.neighbours == b.neighbours && a.positions == b.positions && a.groupPositions == b.groupPositions
             && a.sharing == b.sharing && a.groupSharing == b.groupSharing && a.cards == b.cards
-            && a.airtime == b.airtime && a.power == b.power
+            && a.airtime == b.airtime && a.power == b.power && a.fix == b.fix
             && a.syncedVersion == b.syncedVersion && a.missedSince == b.missedSince
     }
 
@@ -187,6 +190,8 @@ public struct Records: Equatable, Sendable {
             airtime = a
         case let .power(p):
             power = p
+        case let .fix(f):
+            fix = f
         default:
             break
         }
@@ -231,6 +236,8 @@ public struct Records: Equatable, Sendable {
         }
         // Nor one of version 5 or earlier cards.
         if version >= 6 { cards = cards.filter { seen.cards.contains($0.key) } }
+        // A node of version 7 or earlier tells no fix: one held is from before it was.
+        if version < 8 { fix = nil }
         syncedVersion = version
         missedSince = nil
         syncing = nil

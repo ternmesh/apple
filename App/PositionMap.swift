@@ -21,6 +21,10 @@ struct MapPoint: Identifiable, Equatable {
     var name: String
     var position: Position
     var isGroup: Bool
+    /// The node's own fix, from its receiver or a phone: exact, and drawn apart.
+    var isOwn = false
+    /// The own fix's accuracy, which may be past what a shared position's byte holds.
+    var ownAccuracy: UInt16 = 0
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: Double(position.lat) / 1e7, longitude: Double(position.lon) / 1e7)
@@ -31,9 +35,11 @@ struct MapPoint: Identifiable, Equatable {
 
     /// How precise, how old, and the altitude and accuracy if it came with them, as one line.
     var details: String {
-        var parts = [PositionWords.within(position.precision), "\(Words.duration(position.age)) ago"]
+        var parts = ["\(Words.duration(position.age)) ago"]
+        if !isOwn { parts.insert(PositionWords.within(position.precision), at: 0) }
         if position.altitude != Position.noAltitude { parts.append("\(position.altitude) m") }
-        if position.accuracy != 0 { parts.append("± \(position.accuracy) m") }
+        let accuracy = isOwn ? ownAccuracy : UInt16(position.accuracy)
+        if accuracy != 0 { parts.append("± \(accuracy) m") }
         return parts.joined(separator: " · ")
     }
 }
@@ -176,8 +182,13 @@ struct PositionMap {
                 ?? MKMarkerAnnotationView(annotation: point, reuseIdentifier: reuse)
             view.annotation = point
             view.canShowCallout = true
-            view.markerTintColor = point.isGroup ? PlatformColor.systemPurple : PlatformColor.systemOrange
-            view.glyphImage = nil
+            view.markerTintColor = point.isOwn ? PlatformColor.systemGreen
+                : point.isGroup ? PlatformColor.systemPurple : PlatformColor.systemOrange
+            #if os(iOS)
+            view.glyphImage = point.isOwn ? UIImage(systemName: "antenna.radiowaves.left.and.right") : nil
+            #else
+            view.glyphImage = point.isOwn ? NSImage(systemSymbolName: "antenna.radiowaves.left.and.right", accessibilityDescription: nil) : nil
+            #endif
             return view
         }
 
@@ -203,6 +214,7 @@ struct PositionMap {
 final class PointAnnotation: NSObject, MKAnnotation {
     let id: String
     let isGroup: Bool
+    let isOwn: Bool
     let coordinate: CLLocationCoordinate2D
     let title: String?
     let subtitle: String?
@@ -210,6 +222,7 @@ final class PointAnnotation: NSObject, MKAnnotation {
     init(_ p: MapPoint) {
         id = p.id
         isGroup = p.isGroup
+        isOwn = p.isOwn
         coordinate = p.coordinate
         title = p.name
         subtitle = p.details

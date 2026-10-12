@@ -72,6 +72,16 @@ final class RecordsFileTests: XCTestCase {
         XCTAssertEqual(Records(decoding: r.encoded() + [UInt8(entry.count)] + entry), r.kept)
     }
 
+    /// Nor is the node's own fix: its age counts on, and every sync of version 8 sends it.
+    func testTheFixIsNotKept() throws {
+        let r = try held()
+        XCTAssertNotNil(r.fix)
+        XCTAssertNil(Records(decoding: r.encoded()).fix)
+        XCTAssertEqual(Records(decoding: r.encoded()), r.kept)
+        let entry = try Frame(seq: 0, body: .fix(r.fix!)).encode()
+        XCTAssertEqual(Records(decoding: r.encoded() + [UInt8(entry.count)] + entry), r.kept)
+    }
+
     /// A file written when the client spoke version 5, or kept from a node that does, holds a
     /// `SELF` without `cards` and `card_name`: it is read, and says nothing of cards.
     func testASelfOfVersion5IsRead() throws {
@@ -170,6 +180,7 @@ private extension Records {
         r.sharing = [:]
         r.groupSharing = [:]
         r.cards = [:]
+        r.fix = nil
         return r
     }
 }

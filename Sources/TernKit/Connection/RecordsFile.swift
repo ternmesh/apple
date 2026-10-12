@@ -14,9 +14,9 @@
 // A SELF from a node of version 5 or earlier, or one a client of version 5 wrote, ends before
 // `cards` and `card_name`: it is read as version 5's, and says nothing of cards.
 //
-// Positions, sharing and cards are not kept. A position's age, sharing's minutes left and how long
-// ago a card was heard are as of when the record was sent, so on disk they only grow wrong, and
-// every sync sends each whole again. A file that holds them all the same is read, and they are
+// Positions, sharing, cards and the node's own fix are not kept. A position's or a fix's age,
+// sharing's minutes left and how long ago a card was heard are as of when the record was sent, so
+// on disk they only grow wrong, and every sync sends each whole again. A file that holds them all the same is read, and they are
 // passed over.
 
 extension Records {
@@ -111,7 +111,7 @@ extension Body {
     /// A record whose numbers count on from when it was sent: one the file does not keep.
     var isFleeting: Bool {
         switch self {
-        case .position, .groupPosition, .sharing, .groupSharing, .card: true
+        case .position, .groupPosition, .sharing, .groupSharing, .card, .fix: true
         default: false
         }
     }
