@@ -12,6 +12,8 @@ struct NodeView: View {
     @State private var cardName = ""
     @State private var confirmingCards = false
     @State private var confirmingUpdate: FirmwareOffer?
+    @State private var renaming = false
+    @State private var label = ""
 
     /// The profiles a node is set to by name, each with where it is for. A node refuses one it does
     /// not have.
@@ -46,6 +48,23 @@ struct NodeView: View {
             }
             .formStyle(.grouped)
             .navigationTitle(model.nodeName ?? "Node")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Rename") {
+                        label = model.thisNode?.shown ?? ""
+                        renaming = true
+                    }
+                    .disabled(model.thisNode == nil)
+                }
+            }
+            .alert("Rename this node", isPresented: $renaming) {
+                TextField("Name", text: $label)
+                Button("Save") { if let id = model.remembered { model.rename(id, to: label) } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Only this device shows this name. It is not sent to your node, and no one else sees it. "
+                    + "Leave it empty to use the Bluetooth name again.")
+            }
             .onAppear {
                 power = Int(model.records.me?.power ?? 0)
                 cardName = model.records.me?.cardName ?? ""

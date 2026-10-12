@@ -37,6 +37,9 @@ struct ConnectView: View {
             if let id = model.remembered {
                 SwiftUI.Section("This node") {
                     LabeledContent("Name", value: model.nodeName ?? "Tern node")
+                    if let node = model.thisNode, node.label != nil {
+                        LabeledContent("Bluetooth name", value: node.name)
+                    }
                     if let firmware = model.firmware {
                         LabeledContent("Firmware", value: firmware)
                     }
@@ -63,7 +66,7 @@ struct ConnectView: View {
                                 model.connect(to: node.id, name: node.name)
                             } label: {
                                 VStack(alignment: .leading) {
-                                    Text(node.name)
+                                    Text(node.shown)
                                     if model.found.contains(where: { $0.id == node.id }) {
                                         Text("Nearby").font(.caption).foregroundStyle(.secondary)
                                     }
@@ -114,7 +117,7 @@ struct ConnectView: View {
         .onAppear { model.startScanning() }
         .onDisappear { model.stopScanning() }
         .confirmationDialog(
-            "Forget \(forgetting?.name ?? "this node")?",
+            "Forget \(forgetting?.shown ?? "this node")?",
             isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
             titleVisibility: .visible,
             presenting: forgetting

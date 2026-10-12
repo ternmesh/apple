@@ -36,9 +36,15 @@ struct Outgoing: Identifiable, Equatable {
 /// A node the app has connected to and keeps records of.
 struct KnownNode: Identifiable, Equatable {
     var id: UUID
+    /// The name Bluetooth gave when the user chose it.
     var name: String
+    /// The name the user gave it, on this device alone: it never goes to the node.
+    var label: String? = nil
     /// When the user last chose it.
     var chosen: Date
+
+    /// What the app calls the node: the user's label, else the Bluetooth name.
+    var shown: String { label ?? name }
 }
 
 /// A release of the firmware, and the image in it for the node.
@@ -100,6 +106,7 @@ final class NodeModel: ObservableObject {
     @Published private(set) var disconnected = false
     /// Every node the app keeps records of, most recently chosen first.
     @Published private(set) var known: [KnownNode] = []
+    /// What the app calls its node: the user's label for it, else its Bluetooth name.
     @Published private(set) var nodeName: String?
     @Published private(set) var records = Records() {
         didSet {
@@ -211,6 +218,7 @@ final class NodeModel: ObservableObject {
             known.insert(KnownNode(id: id, name: nodeName ?? "Tern node", chosen: Date()), at: 0)
             keepKnown()
         }
+        if let id = remembered, let node = known.first(where: { $0.id == id }) { nodeName = node.shown }
         if let id = link.remembered {
             records = Self.load(id)
             outgoing = Self.loadOutgoing(id)
@@ -267,13 +275,28 @@ final class NodeModel: ObservableObject {
             resetFirmware()
         }
         remembered = id
-        nodeName = name
+        // The label stays: Bluetooth's name for the node is what changes here.
+        let label = known.first { $0.id == id }?.label
+        nodeName = label ?? name
         UserDefaults.standard.set(name, forKey: Self.nameKey)
         known.removeAll { $0.id == id }
-        known.insert(KnownNode(id: id, name: name, chosen: Date()), at: 0)
+        known.insert(KnownNode(id: id, name: name, label: label, chosen: Date()), at: 0)
         keepKnown()
         link.connect(to: id)
         disconnected = link.isDisconnected
+    }
+
+    /// The app's node, as the list of known nodes has it.
+    var thisNode: KnownNode? { known.first { $0.id == remembered } }
+
+    /// Gives the node `id` the label the app shows it by, on this device alone; an empty label goes
+    /// back to the Bluetooth name. Nothing is sent to the node.
+    func rename(_ id: UUID, to label: String) {
+        guard let i = known.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        known[i].label = trimmed.isEmpty ? nil : trimmed
+        keepKnown()
+        if id == remembered { nodeName = known[i].shown }
     }
 
     /// Tries again after a failure, or connects again after the user disconnected.
@@ -1043,7 +1066,9 @@ final class NodeModel: ObservableObject {
 
     private func keepKnown() {
         let kept = known.map { k -> [String: String] in
-            ["id": k.id.uuidString, "name": k.name, "chosen": String(k.chosen.timeIntervalSince1970)]
+            var d = ["id": k.id.uuidString, "name": k.name, "chosen": String(k.chosen.timeIntervalSince1970)]
+            d["label"] = k.label
+            return d
         }
         UserDefaults.standard.set(kept, forKey: Self.knownKey)
     }
@@ -1053,7 +1078,7 @@ final class NodeModel: ObservableObject {
         return kept.compactMap { d in
             guard let id = d["id"].flatMap(UUID.init(uuidString:)), let name = d["name"] else { return nil }
             let chosen = d["chosen"].flatMap(Double.init).map(Date.init(timeIntervalSince1970:)) ?? .distantPast
-            return KnownNode(id: id, name: name, chosen: chosen)
+            return KnownNode(id: id, name: name, label: d["label"], chosen: chosen)
         }
         .sorted { $0.chosen > $1.chosen }
     }
