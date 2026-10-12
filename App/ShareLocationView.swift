@@ -148,6 +148,16 @@ struct ShareLocationView: View {
 
 /// A position's precision and sharing's time left, in words, the same on every screen.
 enum PositionWords {
+    /// What the node's satellite receiver is doing, and where its fix came from.
+    static func receiver(_ f: NodeFix) -> String {
+        switch f.receiver {
+        case NodeFix.fixed: return "Position from satellites · \(f.satellites) satellite\(f.satellites == 1 ? "" : "s")"
+        case NodeFix.searching: return "Looking for satellites"
+        case NodeFix.off: return "Satellite receiver off"
+        default: return f.has ? "Position from a phone" : "No satellite receiver"
+        }
+    }
+
     /// How far a cell of `precision` is, north to south: the five the share sheet offers as the
     /// specification's table rounds them, and the rest from `360 / 2^precision` degrees.
     static func size(_ precision: UInt8) -> String {

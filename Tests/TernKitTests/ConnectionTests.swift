@@ -20,10 +20,12 @@ final class ConnectionTests: XCTestCase {
         let link = Link(Connection(now: { 0 }, wallTime: { time }))
         let answers = link.replay(frames)
 
-        XCTAssertEqual(answers.count, 23)
-        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 20, "every request answered but three")
+        XCTAssertEqual(answers.count, 26)
+        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 22, "every request answered but four")
         let refused = answers.indices.filter { answers[$0] == .failure(.refused(code: ErrorCode.refused)) }
-        XCTAssertEqual(refused, [12, 17, 22], "a precision past 24, cards neither on nor off, and a join code whose check fails")
+        XCTAssertEqual(
+            refused, [12, 17, 22, 24],
+            "a precision past 24, cards neither on nor off, a join code whose check fails, and the receiver neither on nor off")
         guard case let .link(shown) = try answers[20].get() else { return XCTFail("GROUP_LINK is answered with LINK") }
         XCTAssertEqual(JoinCode.read(shown), JoinCode(group: GroupID(hex: "c8eafadc0857a696")!, name: "Ridge walkers"))
         let r = link.connection.records
@@ -57,6 +59,11 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(r.sharing, [:], "sharing with Bob turned on, then off")
         XCTAssertEqual(r.groupSharing, [:], "sharing with the group refused")
         XCTAssertEqual(r.groupPositions, [:])
+        // The node's fix: the receiver turned off, then on again, its last fix kept.
+        let fixes = link.events.compactMap { if case let .news(.fix(f)) = $0 { f } else { nil } }
+        XCTAssertEqual(r.fix, fixes.last)
+        XCTAssertEqual(r.fix?.receiver, NodeFix.searching)
+        XCTAssertEqual(r.fix?.source, NodeFix.fromReceiver)
     }
 
     /// A client of version 0 that holds messages through 17 asks only for those after them, and
@@ -149,6 +156,24 @@ final class ConnectionTests: XCTestCase {
         XCTAssertNil(r.me?.cards)
         XCTAssertNil(r.me?.cardName)
         XCTAssertEqual(r.cards, [:])
+    }
+
+    /// A client of version 7 is told no fix, and does not send the receiver setting, which is
+    /// version 8's.
+    func testOlderVersion7() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 7 }!
+        let frames = older["frames"]!.array
+        let link = Link(Connection(version: 7, now: { 0 }, wallTime: nil))
+        _ = link.replay(Array(frames.dropLast(2)))
+        XCTAssertEqual(link.connection.agreed, 7)
+        XCTAssertEqual(try Frame.decode(frames[frames.count - 2]["frame"]!.bytes).body, .set(.receiver(0)))
+
+        var result: Result<Body, RequestFailure>?
+        link.connection.submit(.set(.receiver(0))) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(link.out, [])
+        XCTAssertEqual(link.connection.records.syncedVersion, 7)
+        XCTAssertNil(link.connection.records.fix)
     }
 
     /// A client of version 6 is told of cards, and does not send a request its version does not

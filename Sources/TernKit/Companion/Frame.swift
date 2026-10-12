@@ -1,11 +1,12 @@
-// The companion protocol's frames, version 7: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 8: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 6 is this without join codes (the requests
+    /// The version this client speaks. Version 7 is this without the node's own fix (the setting
+    /// 7 and the news `FIX`), version 6 is version 7 without join codes (the requests
     /// `GROUP_LINK` and `JOIN_LINK`, and the answer `LINK`), version 5 is version 6 without cards (the settings 5 and 6,
     /// `SELF`'s `cards` and `card_name`, and the news `CARD` and `CARD_GONE`), version 4 is
     /// version 5 without positions (the requests `0x33` to `0x35`, error 12, and the news
@@ -13,7 +14,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 7
+    public static let version: UInt8 = 8
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -24,6 +25,7 @@ public enum Companion {
         case 0x33...0x35, 0x8E...0x91: 5
         case 0x92...0x93: 6
         case 0x26...0x27, 0x47: 7
+        case 0x94: 8
         default: 0
         }
     }
@@ -54,7 +56,7 @@ public enum Companion {
     /// How many of its last messages a node matches a `SEND`'s `ref` against.
     public static let refs = 16
     /// The least time between two `ASKED`s for one address, or two of `NEIGHBOUR`, `AIRTIME` or
-    /// `POWER`, in seconds.
+    /// `POWER`, or two `FIX`es for a fix that moved, in seconds.
     public static let quiet = 10.0
 
     /// The GATT service a node offers, and its two characteristics.
@@ -172,6 +174,9 @@ public enum Setting: Equatable, Sendable {
     /// The name the node's cards carry, empty for none: the one name a node puts on the air in
     /// clear. Only as the user asks.
     case cardName(String)
+    /// 1 to run the node's satellite receiver, 0 to turn it off: a node refuses any other value,
+    /// and 1 if it has none. Only as the user asks.
+    case receiver(UInt8)
 
     var number: UInt8 {
         switch self {
@@ -181,6 +186,7 @@ public enum Setting: Equatable, Sendable {
         case .passkey: 4
         case .cards: 5
         case .cardName: 6
+        case .receiver: 7
         }
     }
 
@@ -190,6 +196,7 @@ public enum Setting: Equatable, Sendable {
     static func since(number: UInt8) -> UInt8 {
         switch number {
         case 5, 6: 6
+        case 7: 8
         default: 0
         }
     }
@@ -487,7 +494,54 @@ public struct Card: Equatable, Sendable {
     }
 }
 
-/// What a frame says: every frame of version 7.
+/// `FIX`: the node's own fix, and what its satellite receiver is doing.
+public struct NodeFix: Equatable, Sendable {
+    /// What the node's satellite receiver is doing: one of `none`, `off`, `searching`, `fixed`.
+    public var receiver: UInt8
+    /// Where the fix came from: `noSource`, `fromReceiver` or `fromClient`.
+    public var source: UInt8
+    /// In 10^-7 degree, north and east positive; 0 with no source.
+    public var lat: Int32
+    public var lon: Int32
+    /// Metres above the WGS 84 ellipsoid, or `Position.noAltitude`.
+    public var altitude: Int16
+    /// Metres; 0 if the fix gave none.
+    public var accuracy: UInt16
+    /// How many seconds old the fix was, as of the record.
+    public var age: UInt32
+    /// How many satellites made a receiver's fix; 0 for any other.
+    public var satellites: UInt8
+
+    public init(
+        receiver: UInt8, source: UInt8, lat: Int32, lon: Int32, altitude: Int16, accuracy: UInt16, age: UInt32,
+        satellites: UInt8
+    ) {
+        self.receiver = receiver
+        self.source = source
+        self.lat = lat
+        self.lon = lon
+        self.altitude = altitude
+        self.accuracy = accuracy
+        self.age = age
+        self.satellites = satellites
+    }
+
+    /// The node has no satellite receiver.
+    public static let none: UInt8 = 0
+    public static let off: UInt8 = 1
+    public static let searching: UInt8 = 2
+    public static let fixed: UInt8 = 3
+
+    /// The node has no fix.
+    public static let noSource: UInt8 = 0
+    public static let fromReceiver: UInt8 = 1
+    public static let fromClient: UInt8 = 2
+
+    /// Whether it is a fix at all.
+    public var has: Bool { source != NodeFix.noSource }
+}
+
+/// What a frame says: every frame of version 8.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -571,6 +625,8 @@ public enum Body: Equatable, Sendable {
     case card(Card)
     /// The node forgot the card it held from `address`.
     case cardGone(address: Address)
+    /// The node's own fix, and its satellite receiver.
+    case fix(NodeFix)
 
     /// The type byte.
     public var type: UInt8 {
@@ -627,6 +683,7 @@ public enum Body: Equatable, Sendable {
         case .groupSharing: 0x91
         case .card: 0x92
         case .cardGone: 0x93
+        case .fix: 0x94
         }
     }
 
@@ -685,6 +742,7 @@ public enum Body: Equatable, Sendable {
         case .groupSharing: "GROUP_SHARING"
         case .card: "CARD"
         case .cardGone: "CARD_GONE"
+        case .fix: "FIX"
         }
     }
 }

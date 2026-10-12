@@ -1,5 +1,5 @@
-// The positions the node holds, on a map and in a list newest first, and whom the node shares its
-// own with. A group member's position is under the group's name and the routing id the member
+// The positions the node holds, on a map and in a list newest first, whom the node shares its own
+// with, and where the node itself is, from its own satellite receiver or from a phone. A group member's position is under the group's name and the routing id the member
 // claimed, never a contact's name: the id proves nothing about who sent it.
 
 import SwiftUI
@@ -15,7 +15,7 @@ struct MapView: View {
             SwiftUI.Group {
                 if model.speaksPositions {
                     VStack(spacing: 0) {
-                        PositionMap(points: points, showsPhone: model.locationAllowed, focus: focus)
+                        PositionMap(points: own.map { [$0] + points } ?? points, showsPhone: model.locationAllowed, focus: focus)
                             .frame(minHeight: 220, maxHeight: .infinity)
                         Divider()
                         list
@@ -45,6 +45,22 @@ struct MapView: View {
 
     private var list: some View {
         List {
+            if let f = model.ownFix {
+                SwiftUI.Section("Your node") {
+                    Button {
+                        if let own { focus = MapFocus(id: own.id, count: (focus?.count ?? 0) + 1) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(model.nodeName ?? "Your node")
+                            Text(PositionWords.receiver(f)).font(.caption).foregroundStyle(.secondary)
+                            Text(own?.details ?? "No position yet").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Color.primary)
+                    .disabled(own == nil)
+                }
+            }
             SwiftUI.Section("Positions") {
                 if points.isEmpty {
                     Text("No one is sharing their location with you yet.").foregroundStyle(.secondary)
@@ -80,6 +96,16 @@ struct MapView: View {
                 }
             }
         }
+    }
+
+    /// The node's own fix, if it has one, as an exact point.
+    private var own: MapPoint? {
+        guard let f = model.ownFix, f.has else { return nil }
+        let p = Position(
+            precision: Companion.precisionMax, lat: f.lat, lon: f.lon, altitude: f.altitude,
+            accuracy: 0, age: f.age)
+        return MapPoint(
+            id: "self", name: model.nodeName ?? "Your node", position: p, isGroup: false, isOwn: true, ownAccuracy: f.accuracy)
     }
 
     /// Every position the node holds, newest first.

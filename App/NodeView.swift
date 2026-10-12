@@ -38,6 +38,7 @@ struct NodeView: View {
                     airtime
                     settings(me)
                     card(me)
+                    receiver
                     neighbours
                 } else {
                     Text(model.isConnected ? "Waiting for the node…" : "Connect to a node to see it here.")
@@ -223,6 +224,27 @@ struct NodeView: View {
                 Text("Anyone near can see this node's address and the name above, every couple of hours, "
                     + "while the card is on. It is off until you turn it on. The cards of others show "
                     + "under Who's About in Contacts either way.")
+            }
+            .disabled(!model.isConnected)
+        }
+    }
+
+    /// The node's satellite receiver, on or off, for a node that has one. Off saves its battery; it
+    /// keeps its last fix, and a phone sharing its location gives it a newer one.
+    @ViewBuilder
+    private var receiver: some View {
+        if let f = model.ownFix, f.receiver != NodeFix.none {
+            SwiftUI.Section {
+                Toggle(
+                    "Use the node's satellite receiver",
+                    isOn: Binding(get: { f.receiver != NodeFix.off }, set: { model.set(.receiver($0 ? 1 : 0)) }))
+                Text(PositionWords.receiver(f)).foregroundStyle(.secondary)
+            } header: {
+                Text("GPS")
+            } footer: {
+                Text("On, the node works out where it is from satellites, on its own. Off saves its battery: "
+                    + "it keeps the last position it had, and takes a newer one from your phone while you share "
+                    + "your location.")
             }
             .disabled(!model.isConnected)
         }

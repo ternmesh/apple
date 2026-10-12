@@ -566,6 +566,18 @@ final class NodeModel: ObservableObject {
         return s
     }
 
+    /// Whether the node tells its own fix and takes the receiver setting: version 8 or later.
+    var speaksFix: Bool { (agreed ?? 0) >= 8 }
+
+    /// The node's own fix, its age counted on from when its record came; nil from a node that does
+    /// not tell it.
+    var ownFix: NodeFix? {
+        guard speaksFix, var f = records.fix else { return nil }
+        let since = UInt64(max(0, clock.timeIntervalSince(heard["f"] ?? clock)))
+        f.age = UInt32(min(UInt64(f.age) + since, UInt64(UInt32.max)))
+        return f
+    }
+
     /// `p`, held under `key` as `heard` keys it, its age counted on from when its record came.
     func counted(_ p: Position, key: String) -> Position {
         var p = p
@@ -581,7 +593,7 @@ final class NodeModel: ObservableObject {
 
     /// When each position, sharing and card record held arrived: the `age`, `minutes` and `heard`
     /// each gives are as of then. Keyed "c:" and an address, "g:" a group and routing id, "sc:" and
-    /// "sg:" for sharing, "k:" and an address for a card.
+    /// "sg:" for sharing, "k:" and an address for a card, and "f" for the node's own fix.
     private var heard: [String: Date] = [:]
 
     /// Notes that a position, sharing or card record arrived now: each one's `age`, `minutes` or
@@ -595,6 +607,7 @@ final class NodeModel: ObservableObject {
         case let .sharing(contact, _): key = "sc:\(contact)"
         case let .groupSharing(group, _): key = "sg:\(group)"
         case let .card(c): key = "k:\(c.address)"
+        case .fix: key = "f"
         default: return
         }
         heard[key] = Date()
@@ -608,6 +621,7 @@ final class NodeModel: ObservableObject {
         keys.formUnion(new.sharing.keys.map { "sc:\($0)" })
         keys.formUnion(new.groupSharing.keys.map { "sg:\($0)" })
         keys.formUnion(new.cards.keys.map { "k:\($0)" })
+        if new.fix != nil { keys.insert("f") }
         heard = heard.filter { keys.contains($0.key) }
         clock = Date()
     }
