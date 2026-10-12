@@ -148,14 +148,27 @@ struct ShareLocationView: View {
 
 /// A position's precision and sharing's time left, in words, the same on every screen.
 enum PositionWords {
-    /// What the node's satellite receiver is doing, and where its fix came from.
+    /// What the node's satellite receiver is doing, and where its fix came from, which need not be
+    /// the receiver: "Position from satellites · 9 satellites", "Looking for satellites · Position
+    /// from a phone".
     static func receiver(_ f: NodeFix) -> String {
+        var parts: [String] = []
         switch f.receiver {
-        case NodeFix.fixed: return "Position from satellites · \(f.satellites) satellite\(f.satellites == 1 ? "" : "s")"
-        case NodeFix.searching: return "Looking for satellites"
-        case NodeFix.off: return "Satellite receiver off"
-        default: return f.has ? "Position from a phone" : "No satellite receiver"
+        // A receiver with a fix while the node's is a phone's: the phone's was the newer.
+        case NodeFix.fixed: break
+        case NodeFix.searching: parts.append("Looking for satellites")
+        case NodeFix.off: parts.append("Satellite receiver off")
+        default: if !f.has { parts.append("No satellite receiver") }
         }
+        switch f.source {
+        case NodeFix.fromReceiver where f.receiver == NodeFix.fixed:
+            parts.append("Position from satellites")
+            parts.append("\(f.satellites) satellite\(f.satellites == 1 ? "" : "s")")
+        case NodeFix.fromReceiver: parts.append("Last position from satellites")
+        case NodeFix.fromClient: parts.append("Position from a phone")
+        default: break
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// How far a cell of `precision` is, north to south: the five the share sheet offers as the
