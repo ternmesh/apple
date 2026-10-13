@@ -20,8 +20,9 @@ final class ConnectionTests: XCTestCase {
         let link = Link(Connection(now: { 0 }, wallTime: { time }))
         let answers = link.replay(frames)
 
-        XCTAssertEqual(answers.count, 26)
-        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 22, "every request answered but four")
+        XCTAssertEqual(answers.count, 27)
+        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 23, "every request answered but four")
+        XCTAssertEqual(answers.last, .success(.ok), "OFF is answered, before the node turns off")
         let refused = answers.indices.filter { answers[$0] == .failure(.refused(code: ErrorCode.refused)) }
         XCTAssertEqual(
             refused, [12, 17, 22, 24],
@@ -158,6 +159,27 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(r.cards, [:])
     }
 
+    /// A client of version 8 does not send `OFF`, which is version 9's; the node refuses it from
+    /// one that does.
+    func testOlderVersion8() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 8 }!
+        let frames = older["frames"]!.array
+        let link = Link(Connection(version: 8, now: { 0 }, wallTime: nil))
+        _ = link.replay(Array(frames.dropLast(2)))
+        XCTAssertEqual(link.connection.agreed, 8)
+        XCTAssertEqual(try Frame.decode(frames[frames.count - 2]["frame"]!.bytes).body, .off)
+        XCTAssertEqual(
+            try Frame.decode(frames[frames.count - 1]["frame"]!.bytes, version: 8).body,
+            .error(code: ErrorCode.undefined))
+
+        var result: Result<Body, RequestFailure>?
+        link.connection.submit(.off) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(link.out, [])
+        XCTAssertEqual(link.connection.records.syncedVersion, 8)
+        XCTAssertNotNil(link.connection.records.fix)
+    }
+
     /// A client of version 7 is told no fix, and does not send the receiver setting, which is
     /// version 8's.
     func testOlderVersion7() throws {
@@ -212,6 +234,41 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(result, .failure(.unsupported))
         XCTAssertEqual(node.sent, [])
         node.connection.submit(.set(.role(1))) { result = $0 }
+        node.answerAll()
+        XCTAssertEqual(result, .success(.ok))
+    }
+
+    /// A client of the latest version talking to a node of version 8 does not turn it off: the
+    /// node would refuse a request its version does not define.
+    func testANodeOfVersion8IsNotTurnedOff() throws {
+        let node = Node()
+        node.version = 8
+        node.connection.open()
+        node.answerAll()
+        XCTAssertEqual(node.connection.agreed, 8)
+        var result: Result<Body, RequestFailure>?
+        node.connection.submit(.off) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(node.sent, [])
+    }
+
+    /// `OFF` given up on is sent again as it was: the node that is still on answers it.
+    func testOffGivenUpOnIsSentAgain() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        var result: Result<Body, RequestFailure>?
+        node.connection.submit(.off) { result = $0 }
+        XCTAssertEqual(try Frame.decode(node.sent.last!).body, .off)
+        node.time += Companion.answerWait
+        node.connection.tick()
+        XCTAssertEqual(result, .failure(.noAnswer))
+        XCTAssertEqual(node.events.last, .gone)
+
+        node.sent = []
+        node.connection.open()
+        node.answerAll()
+        node.connection.submit(.off) { result = $0 }
         node.answerAll()
         XCTAssertEqual(result, .success(.ok))
     }

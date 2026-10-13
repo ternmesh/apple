@@ -11,7 +11,7 @@ It finds a node over Bluetooth LE, pairs with it by passkey, and from then on ke
 whenever it is in range, in the background too: chats with contacts and groups, invites, contacts
 and the addresses the node refused, who is about, the node's battery, airtime, neighbours and
 settings, its presence card and satellite receiver, where the node is, positions shared with the node on a map and sharing the user's own,
-and updates to its firmware from [ternmesh.org](https://ternmesh.org/firmware/).
+updates to its firmware from [ternmesh.org](https://ternmesh.org/firmware/), and turning the node off.
 
 ```bash
 brew install xcodegen && xcodegen && open Tern.xcodeproj   # the app, for iPhone, iPad and Mac
@@ -29,7 +29,7 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 8, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 9, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
@@ -78,6 +78,11 @@ when the user first shares.
 
 From a node of version 8, the map also shows where the node itself is, from its own satellite
 receiver or from a phone, and the Node tab turns a node's receiver on or off.
+
+From a node of version 9, the Node tab also turns the node off, once the user has been told that
+only the node itself, by its button, its reset or its power, turns it on again. Once the node has
+answered, the app disconnects and says the node is turned off, and does not connect to it again
+until the user does.
 
 Cards are per [draft/cards.md](https://github.com/ternmesh/spec/blob/main/draft/cards.md), with a
 node of version 6 or later. Who's About, reached from Contacts, lists the cards the node holds, the

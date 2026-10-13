@@ -1,6 +1,6 @@
 // The node itself: its address, as a QR code, a link and the short code; its battery and airtime,
-// the neighbours it hears, its settings, its presence card, and its firmware. A setting changed here
-// is shown once the node's SELF says so, not before.
+// the neighbours it hears, its settings, its presence card, and its firmware; and turning it off. A
+// setting changed here is shown once the node's SELF says so, not before.
 
 import SwiftUI
 import TernKit
@@ -12,6 +12,7 @@ struct NodeView: View {
     @State private var cardName = ""
     @State private var confirmingCards = false
     @State private var confirmingUpdate: FirmwareOffer?
+    @State private var confirmingOff = false
     @State private var renaming = false
     @State private var label = ""
 
@@ -46,6 +47,7 @@ struct NodeView: View {
                 }
                 software
                 firmwareUpdate
+                turnOff
             }
             .formStyle(.grouped)
             .navigationTitle(model.nodeName ?? "Node")
@@ -245,6 +247,39 @@ struct NodeView: View {
                 Text("On, the node works out where it is from satellites, on its own. Off saves its battery: "
                     + "it keeps the last position it had, and takes a newer one from your phone while you share "
                     + "your location.")
+            }
+            .disabled(!model.isConnected)
+        }
+    }
+
+    /// Turning the node off, for a node of version 9 or later: only as the user asks, once told that
+    /// nothing turns it on again but the node itself. Once it is off, what the app says of it, and
+    /// connecting again once the user has turned it on.
+    @ViewBuilder
+    private var turnOff: some View {
+        if model.turnedOff {
+            SwiftUI.Section {
+                Text(words(.disconnected, turnedOff: true))
+                Button("Connect") { model.retry() }
+            } header: {
+                Text("Turned off")
+            }
+        } else if model.speaksOff {
+            SwiftUI.Section {
+                Button("Turn Off", role: .destructive) { confirmingOff = true }
+                    .confirmationDialog(
+                        "Turn off \(model.nodeName ?? "the node")?", isPresented: $confirmingOff,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Turn Off", role: .destructive) { model.turnOff() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("The node stops sending and receiving, and this app cannot reach it. Only the node "
+                            + "itself turns it on again, with its button, its reset or its power: nothing in Tern does.")
+                    }
+            } footer: {
+                Text("Turning the node off saves its battery while it is put away. While it is off, it sends and "
+                    + "receives nothing.")
             }
             .disabled(!model.isConnected)
         }
