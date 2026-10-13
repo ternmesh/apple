@@ -22,7 +22,9 @@ struct ConnectView: View {
         List {
             SwiftUI.Section("Status") {
                 // Looking for other nodes while disconnected: what matters is that the app is off its own.
-                Text(words(model.disconnected && model.linkState == .scanning ? .disconnected : model.linkState))
+                Text(words(
+                    model.disconnected && model.linkState == .scanning ? .disconnected : model.linkState,
+                    turnedOff: model.turnedOff))
                     .foregroundStyle(isFailure ? Color.red : Color.primary)
                 if case .failed = model.linkState {
                     Button("Try Again") { model.retry() }

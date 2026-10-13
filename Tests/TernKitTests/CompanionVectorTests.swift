@@ -108,8 +108,8 @@ final class CompanionVectorTests: XCTestCase {
             let version = UInt8(c["version"]!.int)
             for f in c["frames"]!.array {
                 let name = f["type"]!.string
-                // The clients of versions 1, 3, 4 and 5 end with a request their version does not
-                // define.
+                // The clients of versions 1 and 3 to 8 end with a request their version does not
+                // define, or a setting it does not.
                 if let latest = try? Frame.decode(f["frame"]!.bytes), latest.body.since > version {
                     XCTAssertThrowsError(try Frame.decode(f["frame"]!.bytes, version: version), name)
                     continue
@@ -277,6 +277,18 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertThrowsError(try Frame.decode(Array(bytes.prefix(20)))) { XCTAssertEqual($0 as? DecodeError, .malformed) }
     }
 
+    /// Turning the node off is version 9's: a request with no fields, which a client sends
+    /// again unchanged after giving up on its answer.
+    func testOffIsVersion9s() throws {
+        XCTAssertEqual(Companion.since(type: 0x06), 9)
+        XCTAssertEqual(Body.off.since, 9)
+        XCTAssertTrue(Body.off.type.isRequestType)
+        XCTAssertEqual(try Frame(seq: 7, body: .off).encode(), [0x06, 7])
+        XCTAssertEqual(try Frame.decode([0x06, 7]).body, .off)
+        XCTAssertThrowsError(try Frame.decode([0x06, 7], version: 8)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertEqual(Frame.errorCode(for: [0x06, 7], .undefined), ErrorCode.undefined)
+    }
+
     func testAFrameThatNeverFinishesIsGivenUpAsText() {
         var r = StreamReader()
         XCTAssertEqual(r.push(Hex.decode("f554000240")!), [])
@@ -322,6 +334,7 @@ final class CompanionVectorTests: XCTestCase {
         case "SYNC": return .sync(after: u32("after"))
         case "PING": return .ping
         case "SET_TIME": return .setTime(u32("time"))
+        case "OFF": return .off
         case "SET":
             switch u8("setting") {
             case 1: return .set(.region(str("value")))

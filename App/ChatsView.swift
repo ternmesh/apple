@@ -26,7 +26,7 @@ struct ChatsView: View {
         NavigationStack(path: $model.chatPath) {
             List {
                 if !model.isConnected {
-                    Text(words(model.linkState))
+                    Text(words(model.linkState, turnedOff: model.turnedOff))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }

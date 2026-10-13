@@ -168,14 +168,17 @@ func copyToClipboard(_ text: String) {
     #endif
 }
 
-/// What the link is doing, in words.
-func words(_ state: BluetoothLink.State) -> String {
+/// What the link is doing, in words. `turnedOff`: the user turned the node off, which is why the app
+/// is off it.
+func words(_ state: BluetoothLink.State, turnedOff: Bool = false) -> String {
     switch state {
     case .starting: return "Starting Bluetooth…"
     case .unsupported: return "This device has no Bluetooth LE."
     case .unauthorized: return "Tern is not allowed to use Bluetooth."
     case .poweredOff: return "Bluetooth is off."
     case .idle: return "Not connected."
+    case .disconnected where turnedOff:
+        return "Turned off. Turn the node on again on the node itself, with its button or its power, then connect."
     case .disconnected: return "Disconnected. Tern stays off the node until you connect. Messages wait for you on the node."
     case .scanning: return "Looking for nodes…"
     case .connecting: return "Connecting…"

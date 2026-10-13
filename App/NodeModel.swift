@@ -104,6 +104,9 @@ final class NodeModel: ObservableObject {
     @Published private(set) var remembered: UUID?
     /// The user disconnected from the remembered node, and the app stays off it until they connect.
     @Published private(set) var disconnected = false
+    /// The user turned the remembered node off, and it said it would turn off: the app stays off
+    /// it, as disconnected, and says so, until they connect.
+    @Published private(set) var turnedOff = false
     /// Every node the app keeps records of, most recently chosen first.
     @Published private(set) var known: [KnownNode] = []
     /// What the app calls its node: the user's label for it, else its Bluetooth name.
@@ -206,11 +209,13 @@ final class NodeModel: ObservableObject {
     /// The user was told the node shares only its own fix without the phone's location.
     private static let toldNoLocationKey = "org.ternmesh.tern.toldNoLocation"
     private static func setupKey(_ id: UUID) -> String { "org.ternmesh.tern.setup.\(id.uuidString)" }
+    private static func offKey(_ id: UUID) -> String { "org.ternmesh.tern.off.\(id.uuidString)" }
 
     init() {
         link = BluetoothLink()
         remembered = link.remembered
         disconnected = link.isDisconnected
+        turnedOff = disconnected && remembered.map { UserDefaults.standard.bool(forKey: Self.offKey($0)) } ?? false
         nodeName = UserDefaults.standard.string(forKey: Self.nameKey)
         known = Self.loadKnown()
         // A node chosen before the app kept a list of them.
@@ -284,6 +289,7 @@ final class NodeModel: ObservableObject {
         keepKnown()
         link.connect(to: id)
         disconnected = link.isDisconnected
+        setTurnedOff(false)
     }
 
     /// The app's node, as the list of known nodes has it.
@@ -303,6 +309,7 @@ final class NodeModel: ObservableObject {
     func retry() {
         link.retry()
         disconnected = link.isDisconnected
+        if !disconnected { setTurnedOff(false) }
     }
 
     /// Drops the link and stays off the node until the user connects again. The node and what the
@@ -323,6 +330,7 @@ final class NodeModel: ObservableObject {
         remembered = nil
         link.forget()
         disconnected = link.isDisconnected
+        turnedOff = false
         Self.remove(id)
         nodeName = nil
         UserDefaults.standard.removeObject(forKey: Self.nameKey)
@@ -714,6 +722,50 @@ final class NodeModel: ObservableObject {
         }
     }
 
+    // MARK: Turning the node off
+
+    /// Whether the node can be turned off from here: version 9 or later. A node before it would
+    /// refuse the request, and none is offered.
+    var speaksOff: Bool { (agreed ?? 0) >= 9 }
+
+    /// Turns the node off. Only ever because the user asked, once told that only the node itself
+    /// turns it on again. Once the node answers, the app disconnects and stays off it, saying it is
+    /// turned off rather than gone, until the user connects again. With no answer the node may be
+    /// on still, and asking again is safe: the specification lets a client send `OFF` twice.
+    func turnOff() {
+        guard speaksOff, let id = remembered else { return }
+        guard let c = link.connection else {
+            problem = Words.failure(.closed)
+            return
+        }
+        c.submit(.off) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success:
+                // The node is about to drop the link: it is not there to connect to again.
+                guard self.remembered == id else { return }
+                self.disconnect()
+                self.setTurnedOff(true)
+            case .failure(.noAnswer):
+                self.problem = "The node did not answer. It may have turned off. If it is still on, turn it off again."
+            case let .failure(f):
+                self.problem = Words.failure(f)
+            }
+        }
+    }
+
+    /// Notes whether the app's node was turned off, across runs too, so that the app says so in place
+    /// of only disconnected.
+    private func setTurnedOff(_ off: Bool) {
+        turnedOff = off
+        guard let id = remembered else { return }
+        if off {
+            UserDefaults.standard.set(true, forKey: Self.offKey(id))
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.offKey(id))
+        }
+    }
+
     // MARK: Firmware
 
     /// Asks the site for its latest release, and finds the image in it for the node.
@@ -1076,6 +1128,7 @@ final class NodeModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: outgoingKey(id))
         UserDefaults.standard.removeObject(forKey: askedKey(id))
         UserDefaults.standard.removeObject(forKey: setupKey(id))
+        UserDefaults.standard.removeObject(forKey: offKey(id))
     }
 
     private func keepKnown() {

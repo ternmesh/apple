@@ -31,7 +31,7 @@ extension Frame {
             w.u8(version)
         case let .sync(after):
             w.u32(after)
-        case .ping, .ok, .updateEnd:
+        case .ping, .off, .ok, .updateEnd:
             break
         case let .synced(news):
             if let news { w.u8(news) }
@@ -235,6 +235,7 @@ extension Frame {
             case 7: body = .set(.receiver(try r.u8()))
             default: throw DecodeError.undefined
             }
+        case 0x06: body = .off
         case 0x10:
             body = .send(ref: try r.u32(), to: try r.addr(), text: try r.str(limit: Companion.textMax))
         case 0x11: body = .read(through: try r.u32())

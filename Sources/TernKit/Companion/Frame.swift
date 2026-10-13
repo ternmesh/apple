@@ -1,12 +1,13 @@
-// The companion protocol's frames, version 8: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 9: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 7 is this without the node's own fix (the setting
-    /// 7 and the news `FIX`), version 6 is version 7 without join codes (the requests
+    /// The version this client speaks. Version 8 is this without turning the node off (the
+    /// request `OFF`), version 7 is version 8 without the node's own fix (the setting 7 and the
+    /// news `FIX`), version 6 is version 7 without join codes (the requests
     /// `GROUP_LINK` and `JOIN_LINK`, and the answer `LINK`), version 5 is version 6 without cards (the settings 5 and 6,
     /// `SELF`'s `cards` and `card_name`, and the news `CARD` and `CARD_GONE`), version 4 is
     /// version 5 without positions (the requests `0x33` to `0x35`, error 12, and the news
@@ -14,7 +15,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 8
+    public static let version: UInt8 = 9
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -26,6 +27,7 @@ public enum Companion {
         case 0x92...0x93: 6
         case 0x26...0x27, 0x47: 7
         case 0x94: 8
+        case 0x06: 9
         default: 0
         }
     }
@@ -541,7 +543,7 @@ public struct NodeFix: Equatable, Sendable {
     public var has: Bool { source != NodeFix.noSource }
 }
 
-/// What a frame says: every frame of version 8.
+/// What a frame says: every frame of version 9.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -549,6 +551,10 @@ public enum Body: Equatable, Sendable {
     case ping
     case setTime(UInt32)
     case set(Setting)
+    /// Turn the node off, which it answers with `OK` and then does: every connection drops, and
+    /// only the node itself, by its button, its reset or its power, turns it on again. Only ever
+    /// at the user's asking.
+    case off
     case send(ref: UInt32, to: Address, text: String)
     case read(through: UInt32)
     case saveContact(address: Address, name: String)
@@ -636,6 +642,7 @@ public enum Body: Equatable, Sendable {
         case .ping: 0x03
         case .setTime: 0x04
         case .set: 0x05
+        case .off: 0x06
         case .send: 0x10
         case .read: 0x11
         case .saveContact: 0x18
@@ -695,6 +702,7 @@ public enum Body: Equatable, Sendable {
         case .ping: "PING"
         case .setTime: "SET_TIME"
         case .set: "SET"
+        case .off: "OFF"
         case .send: "SEND"
         case .read: "READ"
         case .saveContact: "SAVE_CONTACT"
