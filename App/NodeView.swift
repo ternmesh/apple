@@ -107,7 +107,7 @@ struct NodeView: View {
             .buttonStyle(.borderless)
             LabeledContent("Role", value: Words.role(me.role))
             LabeledContent("Region", value: me.region.isEmpty ? "Not set" : me.region)
-            LabeledContent("Power", value: "\(me.power) dBm")
+            LabeledContent("Power", value: me.most == 1 ? "\(me.power) dBm, the most it may" : "\(me.power) dBm")
             LabeledContent("Clock", value: me.time == 0 ? "Not set" : date(me.time).formatted(date: .abbreviated, time: .shortened))
         } header: {
             Text("Address")
@@ -165,8 +165,16 @@ struct NodeView: View {
             }
             .pickerStyle(.segmented)
             Stepper("Power: \(power) dBm", value: $power, in: -9...30)
-            if power != Int(me.power) {
+            // A number the user sets is kept when the region changes, where the most moves with
+            // it: so while the node sends at the most, even the number it sends at now is worth
+            // setting.
+            if power != Int(me.power) || me.most == 1 {
                 Button("Set Power to \(power) dBm") { model.set(.power(Int8(power))) }
+            }
+            // The most the node may transmit at, which it works out for its board, its antenna and
+            // its region, and works out again when the region changes.
+            if model.speaksMost && me.most != 1 {
+                Button("Send at the Most It May") { model.set(.power(Companion.powerMost)) }
             }
             TextField("Passkey, 6 digits", text: $passkey)
             #if os(iOS)

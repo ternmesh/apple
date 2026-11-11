@@ -543,6 +543,10 @@ final class NodeModel: ObservableObject {
     /// Whether the node speaks cards: version 6 or later. Before it, nothing of them is offered.
     var speaksCards: Bool { (agreed ?? 0) >= 6 }
 
+    /// Whether the node can be asked for the most it may transmit at: version 10 or later. A node
+    /// before it would take -128 as a power, and refuse it.
+    var speaksMost: Bool { (agreed ?? 0) >= 10 }
+
     /// The cards the node holds, who is about, the most recently heard first, each heard counted on
     /// from when its record came.
     var cardsHeard: [Card] {

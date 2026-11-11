@@ -1,4 +1,4 @@
-// The companion protocol's frames, version 9: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 10: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
@@ -15,7 +15,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 9
+    public static let version: UInt8 = 10
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -38,6 +38,9 @@ public enum Companion {
     public static let linkMax = 102
     /// The name a node's cards carry, and the one a card held carried.
     public static let cardNameMax = 31
+    /// `SET` 3's power that asks for the most the node may transmit at, which the node works out
+    /// (version 10).
+    public static let powerMost: Int8 = -128
     public static let regionMax = 15
     public static let firmwareMax = 31
     /// `INFO`'s `board` and `release`.
@@ -220,10 +223,13 @@ public struct NodeSelf: Equatable, Sendable {
     /// set.
     public var cards: UInt8?
     public var cardName: String?
+    /// 1 if `power` is the most the node may transmit at, as the node works it out, and 0 if it is
+    /// a power it was given. From a `SELF` of version 10 or later: nil before.
+    public var most: UInt8?
 
     public init(
         address: Address, role: UInt8, region: String, power: Int8, time: UInt32, cards: UInt8? = nil,
-        cardName: String? = nil
+        cardName: String? = nil, most: UInt8? = nil
     ) {
         self.address = address
         self.role = role
@@ -232,6 +238,7 @@ public struct NodeSelf: Equatable, Sendable {
         self.time = time
         self.cards = cards
         self.cardName = cardName
+        self.most = most
     }
 }
 
@@ -543,7 +550,7 @@ public struct NodeFix: Equatable, Sendable {
     public var has: Bool { source != NodeFix.noSource }
 }
 
-/// What a frame says: every frame of version 9.
+/// What a frame says: every frame of version 10.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
