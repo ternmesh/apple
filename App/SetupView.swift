@@ -1,6 +1,10 @@
 // The first time the app meets a node: the region it is in, without which it does not transmit at
 // all; whether it relays; and the code to give others, with a first contact to add. A node the
 // setup has been done for, but whose region has since been cleared, is asked for the region alone.
+//
+// The region and the role are each a setting the node restarts to apply, which drops the
+// connection: so they are held here as the user chooses, and sent together when the setup ends,
+// for the node to apply with one restart rather than one in the middle of each step.
 
 import SwiftUI
 import TernKit
@@ -13,6 +17,9 @@ struct SetupView: View {
     @State private var adding = false
     /// Fixed when the setup opens: a node set up before is asked for its region only.
     @State private var steps: [Step] = []
+    /// What the user chose, not yet sent: nil for what the node has already.
+    @State private var region: String?
+    @State private var role: UInt8?
 
     var body: some View {
         NavigationStack {
@@ -32,14 +39,14 @@ struct SetupView: View {
                     // The region cannot be skipped: until it is set the node sends nothing at all.
                     if step != .region {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Skip") { model.finishSetup() }
+                            Button("Skip") { finish() }
                         }
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button(at < steps.count - 1 ? "Next" : "Done") {
-                            if at < steps.count - 1 { at += 1 } else { model.finishSetup() }
+                            if at < steps.count - 1 { at += 1 } else { finish() }
                         }
-                        .disabled(step == .region && (model.records.me?.region.isEmpty ?? true))
+                        .disabled(step == .region && chosenRegion.isEmpty)
                     }
                 }
             }
@@ -51,11 +58,24 @@ struct SetupView: View {
         .frame(minWidth: 380, minHeight: 480)
     }
 
+    /// The region as it will be once the setup ends: the one chosen, or the node's own.
+    private var chosenRegion: String { region ?? model.records.me?.region ?? "" }
+
+    /// Sends what was chosen, the region first, and ends the setup. Each is sent only if it is not
+    /// what the node has already, so a setup that changes nothing restarts nothing.
+    private func finish() {
+        if let me = model.records.me {
+            if let region, region != me.region { model.set(.region(region)) }
+            if let role, role != me.role { model.set(.role(role)) }
+        }
+        model.finishSetup()
+    }
+
     private func region(_ me: NodeSelf) -> some View {
         SwiftUI.Section {
-            ForEach(NodeView.regions, id: \.name) { region in
-                choice(region.name, detail: region.detail, selected: me.region == region.name) {
-                    model.set(.region(region.name))
+            ForEach(NodeView.regions, id: \.name) { choice in
+                self.choice(choice.name, detail: choice.detail, selected: chosenRegion == choice.name) {
+                    region = choice.name
                 }
             }
         } header: {
@@ -68,13 +88,13 @@ struct SetupView: View {
 
     private func role(_ me: NodeSelf) -> some View {
         SwiftUI.Section {
-            choice("Leaf", detail: "Sends and receives its own messages only. Best for a node you carry.", selected: me.role == 0) {
-                model.set(.role(0))
+            choice("Leaf", detail: "Sends and receives its own messages only. Best for a node you carry.", selected: (role ?? me.role) == 0) {
+                role = 0
             }
             choice(
                 "Relay", detail: "Also passes on messages for others. Best for a node left somewhere high, on power.",
-                selected: me.role == 1
-            ) { model.set(.role(1)) }
+                selected: (role ?? me.role) == 1
+            ) { role = 1 }
         } header: {
             Text("Should your node help others?")
         } footer: {
