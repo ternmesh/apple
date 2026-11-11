@@ -20,8 +20,8 @@ final class ConnectionTests: XCTestCase {
         let link = Link(Connection(now: { 0 }, wallTime: { time }))
         let answers = link.replay(frames)
 
-        XCTAssertEqual(answers.count, 27)
-        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 23, "every request answered but four")
+        XCTAssertEqual(answers.count, 28)
+        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 24, "every request answered but four")
         XCTAssertEqual(answers.last, .success(.ok), "OFF is answered, before the node turns off")
         let refused = answers.indices.filter { answers[$0] == .failure(.refused(code: ErrorCode.refused)) }
         XCTAssertEqual(

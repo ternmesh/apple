@@ -379,7 +379,8 @@ final class CompanionVectorTests: XCTestCase {
         case "SELF":
             return .nodeSelf(NodeSelf(
                 address: addr("address"), role: u8("role"), region: str("region"), power: i8("power"), time: u32("time"),
-                cards: f["cards"].map { UInt8($0.int) }, cardName: f["card_name"]?.string))
+                cards: f["cards"].map { UInt8($0.int) }, cardName: f["card_name"]?.string,
+                most: f["most"].map { UInt8($0.int) }))
         case "CONTACT": return .contact(Contact(address: addr("address"), session: u8("session"), name: str("name")))
         case "CONTACT_GONE": return .contactGone(address: addr("address"))
         case "MESSAGE":

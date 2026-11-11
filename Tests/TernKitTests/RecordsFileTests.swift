@@ -82,6 +82,21 @@ final class RecordsFileTests: XCTestCase {
         XCTAssertEqual(Records(decoding: r.encoded() + [UInt8(entry.count)] + entry), r.kept)
     }
 
+    /// A file written when the client spoke version 9, as every one before version 10 was, holds a
+    /// `SELF` without `most`: it is read with its cards, and says nothing of the most.
+    func testASelfOfVersion9IsReadWithItsCards() throws {
+        var r = try held().kept
+        r.syncedVersion = 9
+        r.me?.cards = 1
+        r.me?.cardName = "Ada"
+        r.me?.most = nil
+        let back = Records(decoding: r.encoded())
+        XCTAssertEqual(back, r)
+        XCTAssertEqual(back.me?.cards, 1)
+        XCTAssertEqual(back.me?.cardName, "Ada")
+        XCTAssertNil(back.me?.most)
+    }
+
     /// A file written when the client spoke version 5, or kept from a node that does, holds a
     /// `SELF` without `cards` and `card_name`: it is read, and says nothing of cards.
     func testASelfOfVersion5IsRead() throws {
@@ -89,6 +104,7 @@ final class RecordsFileTests: XCTestCase {
         r.syncedVersion = 5
         r.me?.cards = nil
         r.me?.cardName = nil
+        r.me?.most = nil
         let file = r.encoded()
         let me = try Frame(seq: 0, body: .nodeSelf(r.me!)).encode()
         XCTAssertEqual(Array(file[11..<12 + me.count]), [UInt8(me.count)] + me, "SELF is the first entry, and ends at time")

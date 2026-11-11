@@ -123,11 +123,12 @@ extension Frame {
             try w.str(s.region, limit: Companion.regionMax, field: "region")
             w.i8(s.power)
             w.u32(s.time)
-            // Version 6's fields, both or neither.
-            if s.cards != nil || s.cardName != nil {
+            // Version 6's fields, both or neither; and version 10's after them.
+            if s.cards != nil || s.cardName != nil || s.most != nil {
                 w.u8(s.cards ?? 0)
                 try w.str(s.cardName ?? "", limit: Companion.cardNameMax, field: "card name")
             }
+            if let most = s.most { w.u8(most) }
         case let .contact(c):
             w.addr(c.address)
             w.u8(c.session)
@@ -286,6 +287,8 @@ extension Frame {
                 me.cards = try r.u8()
                 me.cardName = try r.str(limit: Companion.cardNameMax)
             }
+            // And one of version 9 or earlier, one without `most`.
+            if version >= 10 { me.most = try r.u8() }
             body = .nodeSelf(me)
         case 0x81:
             body = .contact(Contact(address: try r.addr(), session: try r.u8(), name: try r.str(limit: Companion.nameMax)))

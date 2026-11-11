@@ -29,7 +29,7 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 9, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 10, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
@@ -83,6 +83,10 @@ From a node of version 9, the Node tab also turns the node off, once the user ha
 only the node itself, by its button, its reset or its power, turns it on again. Once the node has
 answered, the app disconnects and says the node is turned off, and does not connect to it again
 until the user does.
+
+From a node of version 10, the Node tab says when the node sends at the most it may, which the node
+works out for its board, its antenna and its region, and offers to go back to it once a number has
+been set.
 
 Cards are per [draft/cards.md](https://github.com/ternmesh/spec/blob/main/draft/cards.md), with a
 node of version 6 or later. Who's About, reached from Contacts, lists the cards the node holds, the
