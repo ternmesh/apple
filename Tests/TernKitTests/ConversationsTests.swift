@@ -158,6 +158,29 @@ final class ConversationsTests: XCTestCase {
         XCTAssertEqual(names, [9: "Dan"])
     }
 
+    func testACardNamesARoutingIdNoContactHas() {
+        let dan = Address([UInt8](repeating: 0xDA, count: 32))!
+        let r = records([
+            .contact(Contact(address: Self.bob, session: 1, name: "Bob")),
+            .card(Card(address: Self.bob, heard: 30, name: "Robert")),
+            .card(Card(address: Self.carol, heard: 60, name: "Carol")),
+            .card(Card(address: dan, heard: 90, name: "")),
+        ])
+        let cards = r.routingCards
+        XCTAssertEqual(cards.keys.sorted(), [Self.carol.routingId, dan.routingId].sorted())
+        XCTAssertEqual(cards[Self.carol.routingId]?.name, "Carol")
+        XCTAssertEqual(cards[dan.routingId]?.address, dan, "a card with no name still has its address")
+        XCTAssertNil(cards[Self.bob.routingId], "a contact's own name comes before their card's")
+        XCTAssertEqual(r.routingNames[Self.bob.routingId], "Bob")
+    }
+
+    func testARoutingIdTwoCardsShareNamesNeither() {
+        let card = { (name: String) in Card(address: Self.carol, heard: 0, name: name) }
+        let named: [(id: UInt32, name: Card)] = [(7, card("Carol")), (9, card("Dan")), (7, card("Eve"))]
+        let cards = Records.byRoutingId(named)
+        XCTAssertEqual(cards, [9: card("Dan")])
+    }
+
     // MARK: Words
 
     /// An unanswered send that reached the node is found in a sync, and not sent again.
