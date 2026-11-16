@@ -22,14 +22,14 @@ jobs:
       - run: swift test
 
   macos:
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - run: swift test
 
   # The app: Core Bluetooth and SwiftUI build only here. Unsigned, for the iOS simulator and the Mac.
   app:
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - run: brew install xcodegen
