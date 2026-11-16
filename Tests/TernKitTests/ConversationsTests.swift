@@ -176,7 +176,8 @@ final class ConversationsTests: XCTestCase {
 
     func testARoutingIdTwoCardsShareNamesNeither() {
         let card = { (name: String) in Card(address: Self.carol, heard: 0, name: name) }
-        let cards = Records.byRoutingId([(7, card("Carol")), (9, card("Dan")), (7, card("Eve"))])
+        let named: [(id: UInt32, name: Card)] = [(7, card("Carol")), (9, card("Dan")), (7, card("Eve"))]
+        let cards = Records.byRoutingId(named)
         XCTAssertEqual(cards, [9: card("Dan")])
     }
 
