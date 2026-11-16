@@ -1,7 +1,9 @@
 // Names for routing ids. A neighbour, a group message's writer and a group member's position are
 // known only by the four-byte routing id of draft/routing.md. A client knows whose one is only by
 // working out the routing id of each address it knows, its contacts', and matching them. A group's
-// is what a member claimed, not a proof: a name found for it is shown as nothing more.
+// is what a member claimed, not a proof: a name found for it is shown as nothing more. A node whose
+// card the node holds is known by that card's address too, but its name is only what it claims, so
+// a contact's name comes first.
 
 extension Address {
     private static let routingIdLabel = Array("tern routing id".utf8)
@@ -26,9 +28,17 @@ extension Records {
         Self.byRoutingId(contacts.keys.map { ($0.routingId, name(of: .contact($0))) })
     }
 
-    /// The names, by routing id. An id two of them share names neither, and 0 is no one's.
-    static func byRoutingId(_ named: [(id: UInt32, name: String)]) -> [UInt32: String] {
-        var names: [UInt32: String] = [:]
+    /// The cards held, by the routing id of the address each is from, for an id no contact has: a
+    /// contact's name is the user's own, and comes before what a card claims. As with
+    /// `routingNames`, a screen takes this once.
+    public var routingCards: [UInt32: Card] {
+        let named = Set(contacts.keys.map(\.routingId))
+        return Self.byRoutingId(cards.values.map { ($0.address.routingId, $0) }).filter { !named.contains($0.key) }
+    }
+
+    /// The names, or cards, by routing id. An id two of them share names neither, and 0 is no one's.
+    static func byRoutingId<Name>(_ named: [(id: UInt32, name: Name)]) -> [UInt32: Name] {
+        var names: [UInt32: Name] = [:]
         var shared: Set<UInt32> = [0]
         for (id, name) in named where !shared.contains(id) {
             if names[id] == nil {

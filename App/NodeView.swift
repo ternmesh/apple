@@ -15,6 +15,8 @@ struct NodeView: View {
     @State private var confirmingOff = false
     @State private var renaming = false
     @State private var label = ""
+    /// The card of a neighbour the user is adding as a contact.
+    @State private var adding: Card?
 
     /// The profiles a node is set to by name, each with where it is for. A node refuses one it does
     /// not have.
@@ -293,28 +295,71 @@ struct NodeView: View {
         }
     }
 
+    /// The nodes the node hears. Each is named, if it can be, by a contact's routing id, else by a
+    /// card the node holds, as the claim it is, which offers to add them as a contact as Who's About
+    /// does; one with neither stays a routing id.
     @ViewBuilder
     private var neighbours: some View {
         let list = model.records.neighbours.values.sorted { $0.heard < $1.heard }
+        let cards = model.records.routingCards
         SwiftUI.Section("Neighbours") {
             if list.isEmpty {
                 Text("The node hears no other nodes yet.").foregroundStyle(.secondary)
             }
             ForEach(list, id: \.routingId) { n in
-                VStack(alignment: .leading, spacing: 2) {
-                    // A contact's name, when the routing id is one of theirs.
-                    if let name = model.routingNames[n.routingId] {
+                // A contact's name, when the routing id is one of theirs.
+                if let name = model.routingNames[n.routingId] {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(name)
                         Text(Words.routingId(n.routingId)).font(.caption.monospaced()).foregroundStyle(.secondary)
-                    } else {
-                        Text(Words.routingId(n.routingId)).font(.body.monospaced())
+                        heard(n)
                     }
-                    Text("\(Words.role(n.role)), SNR \(Words.snr(n.snrQuarterDb)), heard \(Words.duration(UInt32(n.heard))) ago")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                } else if let card = cards[n.routingId] {
+                    Button {
+                        adding = card
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(Words.cardName(card.name))
+                                    .foregroundStyle(card.name.isEmpty ? Color.secondary : Color.primary)
+                                HStack {
+                                    Text(Sharing.shortCode(card.address))
+                                    Text(Words.routingId(n.routingId))
+                                }
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                heard(n)
+                            }
+                            Spacer()
+                            Image(systemName: "person.badge.plus").foregroundStyle(Color.accentColor)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Color.primary)
+                    .accessibilityHint("Adds them as a contact")
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(Words.routingId(n.routingId)).font(.body.monospaced())
+                        Text("No card heard from this node.").font(.caption).foregroundStyle(.secondary)
+                        heard(n)
+                    }
                 }
             }
         }
+        .sheet(item: $adding) { c in
+            AddContactSheet(
+                text: Sharing.text(c.address), name: c.name,
+                nameNote: c.name.isEmpty ? nil : "Their card says “\(c.name)”. Save them under any name you like.")
+                .environmentObject(model)
+        }
+    }
+
+    /// What a neighbour is, how well it is heard and how long ago.
+    private func heard(_ n: Neighbour) -> some View {
+        Text("\(Words.role(n.role)), SNR \(Words.snr(n.snrQuarterDb)), heard \(Words.duration(UInt32(n.heard))) ago")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
