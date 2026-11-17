@@ -147,6 +147,11 @@ final class NodeModel: ObservableObject {
     @Published private(set) var locationAllowed = false
     /// The first-run setup was finished, or skipped, for this node.
     @Published private(set) var setUp = true
+    /// The node has no screen and pairs with the default passkey, which anyone near who knows it
+    /// can pair with too: the Node tab asks the user to choose their own, once each connection.
+    @Published private(set) var asksForPasskey = false
+    /// Whether the user was asked on this connection, so that putting it off holds until the next.
+    private var askedForPasskey = false
 
     /// The conversation on screen, which is read as it arrives.
     var visible: Peer? {
@@ -526,6 +531,27 @@ final class NodeModel: ObservableObject {
     }
 
     func dismissAsked(_ a: Asked) { asked.removeAll { $0.address == a.address } }
+
+    /// Asks the user to choose a passkey while the node pairs with the default one, the first time
+    /// its `SELF` says so on a connection; and stops asking once it says otherwise.
+    private func askForPasskey(_ me: NodeSelf) {
+        if me.pairing != NodeSelf.pairingDefault {
+            asksForPasskey = false
+        } else if !askedForPasskey {
+            askedForPasskey = true
+            asksForPasskey = true
+        }
+    }
+
+    /// Sets the passkey the node pairs with from now on, 0 to 999999, as the user typed it.
+    func setPasskey(_ key: UInt32) {
+        guard key <= 999_999 else { return }
+        asksForPasskey = false
+        set(.passkey(key))
+    }
+
+    /// The user put off choosing a passkey: they are asked again on the next connection.
+    func putOffPasskey() { asksForPasskey = false }
 
     private func fits(_ text: String, _ limit: Int) -> Bool {
         guard text.utf8.count <= limit else {
@@ -975,6 +1001,8 @@ final class NodeModel: ObservableObject {
     private func handle(_ event: ConnectionEvent) {
         switch event {
         case let .ready(version, fw):
+            askedForPasskey = false
+            asksForPasskey = false
             firmware = fw
             nodeVersion = version
             agreed = link.connection?.agreed
@@ -990,6 +1018,7 @@ final class NodeModel: ObservableObject {
             } else if records.isArrival(body) {
                 notify(body)
             }
+            if case let .nodeSelf(me) = body { askForPasskey(me) }
             noteArrival(body)
             take()
             scheduleSave()

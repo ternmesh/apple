@@ -9,6 +9,8 @@ struct NodeView: View {
     @EnvironmentObject private var model: NodeModel
     @State private var power = 0
     @State private var passkey = ""
+    /// The passkey typed when asked to choose one, apart from the one in Settings.
+    @State private var ownPasskey = ""
     @State private var cardName = ""
     @State private var confirmingCards = false
     @State private var confirmingUpdate: FirmwareOffer?
@@ -36,6 +38,7 @@ struct NodeView: View {
         NavigationStack {
             Form {
                 if let me = model.records.me {
+                    if model.asksForPasskey && model.isConnected { choosePasskey }
                     identity(me)
                     battery
                     airtime
@@ -90,7 +93,58 @@ struct NodeView: View {
         }
     }
 
+    /// A typed passkey: exactly six digits, as the system asks for one when pairing.
+    static func passkey(_ text: String) -> UInt32? {
+        guard text.count == 6, text.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
+        return UInt32(text)
+    }
+
+    /// What `SELF`'s `pairing` says of how the node pairs.
+    static func pairing(_ pairing: UInt8) -> String {
+        switch pairing {
+        case NodeSelf.pairingShown: "A new passkey on the node's screen"
+        case NodeSelf.pairingDefault: "The default, \(Companion.screenlessPasskey)"
+        case NodeSelf.pairingSet: "Your own passkey"
+        default: "Unknown"
+        }
+    }
+
     // MARK: Sections
+
+    /// Asks the user to choose a passkey for a node without a screen, which pairs with the default
+    /// until they do. Once each connection, until they choose one or put it off.
+    private var choosePasskey: some View {
+        let key = Self.passkey(ownPasskey)
+        return SwiftUI.Section {
+            Text("This node has no screen, so it pairs with the default passkey, \(Companion.screenlessPasskey). "
+                + "Until you choose your own, anyone nearby who knows the default can connect to it, read its "
+                + "messages and change its settings.")
+            TextField("New passkey, 6 digits", text: $ownPasskey)
+            #if os(iOS)
+                .keyboardType(.numberPad)
+            #endif
+            if key == Companion.screenlessPasskey {
+                Text("Choose a passkey other than the default.").foregroundStyle(.red)
+            }
+            HStack {
+                Button("Set Passkey") {
+                    if let key { model.setPasskey(key) }
+                    ownPasskey = ""
+                }
+                .disabled(key == nil || key == Companion.screenlessPasskey)
+                Spacer()
+                Button("Not Now") {
+                    ownPasskey = ""
+                    model.putOffPasskey()
+                }
+            }
+            .buttonStyle(.borderless)
+        } header: {
+            Text("Choose a passkey")
+        } footer: {
+            Text("Write it down: you type it the next time a device pairs with this node. You can change it later under Settings.")
+        }
+    }
 
     private func identity(_ me: NodeSelf) -> some View {
         SwiftUI.Section {
@@ -178,24 +232,32 @@ struct NodeView: View {
             if model.speaksMost && me.most != 1 {
                 Button("Send at the Most It May") { model.set(.power(Companion.powerMost)) }
             }
+            // How the node pairs, from a node of version 11 or later: before it, SELF does not say.
+            if let pairing = me.pairing {
+                LabeledContent("Passkey", value: Self.pairing(pairing))
+            }
             TextField("Passkey, 6 digits", text: $passkey)
             #if os(iOS)
                 .keyboardType(.numberPad)
             #endif
             HStack {
                 Button("Set Passkey") {
-                    if let key = UInt32(passkey) { model.set(.passkey(key)) }
+                    if let key = Self.passkey(passkey) { model.setPasskey(key) }
                     passkey = ""
                 }
-                .disabled(UInt32(passkey).map { $0 > 999_999 } ?? true)
+                .disabled(Self.passkey(passkey) == nil)
                 Spacer()
-                Button("Random Each Time") { model.set(.passkey(0xFFFF_FFFF)) }
+                // The node's default: a new passkey on its screen each time, or 123456 on a node
+                // without one. Nothing to go back to while it pairs with the default already.
+                Button("Use Default") { model.set(.passkey(Companion.passkeyDefault)) }
+                    .disabled(me.pairing == NodeSelf.pairingShown || me.pairing == NodeSelf.pairingDefault)
             }
             .buttonStyle(.borderless)
         } header: {
             Text("Settings")
         } footer: {
-            Text("The node may restart to apply a setting; the app connects again. A new passkey takes effect the next time a device pairs.")
+            Text("The node may restart to apply a setting; the app connects again. A new passkey takes effect the next time a device pairs. "
+                + "By default a node with a screen shows a new passkey each time, and one without a screen uses \(Companion.screenlessPasskey).")
         }
         .disabled(!model.isConnected)
     }

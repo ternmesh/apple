@@ -1,12 +1,13 @@
-// The companion protocol's frames, version 10: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 11: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 8 is this without turning the node off (the
-    /// request `OFF`), version 7 is version 8 without the node's own fix (the setting 7 and the
+    /// The version this client speaks. Version 10 is this without `SELF`'s `pairing`, version 9 is
+    /// version 10 without the most (`SET` 3's -128 and `SELF`'s `most`), version 8 is version 9
+    /// without turning the node off (the request `OFF`), version 7 is version 8 without the node's own fix (the setting 7 and the
     /// news `FIX`), version 6 is version 7 without join codes (the requests
     /// `GROUP_LINK` and `JOIN_LINK`, and the answer `LINK`), version 5 is version 6 without cards (the settings 5 and 6,
     /// `SELF`'s `cards` and `card_name`, and the news `CARD` and `CARD_GONE`), version 4 is
@@ -15,7 +16,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 10
+    public static let version: UInt8 = 11
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -41,6 +42,12 @@ public enum Companion {
     /// `SET` 3's power that asks for the most the node may transmit at, which the node works out
     /// (version 10).
     public static let powerMost: Int8 = -128
+    /// `SET` 4's passkey that asks for the node's default: a new one on the screen for each pairing
+    /// on a node with a screen, `screenlessPasskey` on one without (version 11; a random one each
+    /// time before).
+    public static let passkeyDefault: UInt32 = 0xFFFF_FFFF
+    /// The passkey a node without a screen pairs with until one is set with `SET` 4.
+    public static let screenlessPasskey: UInt32 = 123_456
     public static let regionMax = 15
     public static let firmwareMax = 31
     /// `INFO`'s `board` and `release`.
@@ -172,7 +179,7 @@ public enum Setting: Equatable, Sendable {
     case region(String)
     case role(UInt8)
     case power(Int8)
-    /// 0 to 999999, or 0xFFFFFFFF for a random one each time.
+    /// 0 to 999999, or `Companion.passkeyDefault` for the node's default.
     case passkey(UInt32)
     /// 1 to send cards, 0 to send none: a node refuses any other value. Only as the user asks.
     case cards(UInt8)
@@ -226,10 +233,21 @@ public struct NodeSelf: Equatable, Sendable {
     /// 1 if `power` is the most the node may transmit at, as the node works it out, and 0 if it is
     /// a power it was given. From a `SELF` of version 10 or later: nil before.
     public var most: UInt8?
+    /// How the node is paired: `NodeSelf.pairingShown`, `pairingDefault` or `pairingSet`. From a
+    /// `SELF` of version 11 or later: nil before.
+    public var pairing: UInt8?
+
+    /// `pairing`: the node shows a new passkey on its screen for each pairing.
+    public static let pairingShown: UInt8 = 0
+    /// `pairing`: the node has no screen, and pairs with `Companion.screenlessPasskey`, which
+    /// anyone who knows it can pair with.
+    public static let pairingDefault: UInt8 = 1
+    /// `pairing`: the node pairs with a passkey set with `SET` 4.
+    public static let pairingSet: UInt8 = 2
 
     public init(
         address: Address, role: UInt8, region: String, power: Int8, time: UInt32, cards: UInt8? = nil,
-        cardName: String? = nil, most: UInt8? = nil
+        cardName: String? = nil, most: UInt8? = nil, pairing: UInt8? = nil
     ) {
         self.address = address
         self.role = role
@@ -239,6 +257,7 @@ public struct NodeSelf: Equatable, Sendable {
         self.cards = cards
         self.cardName = cardName
         self.most = most
+        self.pairing = pairing
     }
 }
 
@@ -550,7 +569,7 @@ public struct NodeFix: Equatable, Sendable {
     public var has: Bool { source != NodeFix.noSource }
 }
 
-/// What a frame says: every frame of version 10.
+/// What a frame says: every frame of version 11.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)

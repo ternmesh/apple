@@ -112,7 +112,8 @@ struct ConnectView: View {
             } header: {
                 Text("Other nodes nearby")
             } footer: {
-                Text("The first time, the system asks for a passkey: the one the node shows on its screen, or the one set on it.")
+                Text("The first time, the system asks for a passkey: the one the node shows on its screen, or the one set on it. "
+                    + "A node without a screen uses \(Companion.screenlessPasskey) until you set your own.")
             }
         }
         .navigationTitle("Connect")
