@@ -89,20 +89,6 @@ struct NodeView: View {
             .onChange(of: model.records.me?.power) { p in power = Int(p ?? 0) }
             .onChange(of: model.records.me?.cardName) { n in cardName = n ?? "" }
             .showsProblems()
-            .confirmationDialog(
-                confirmingUpdate.map { "Update the node to \($0.release)?" } ?? "",
-                isPresented: Binding(get: { confirmingUpdate != nil }, set: { if !$0 { confirmingUpdate = nil } }),
-                titleVisibility: .visible
-            ) {
-                Button("Update") { model.update() }
-                Button("Not Now", role: .cancel) {}
-            } message: {
-                if confirmingUpdate?.image.update == .bootloader {
-                    Text("The node restarts into its bootloader, which takes the new firmware over Bluetooth. \(Words.bootloaderUpdateTakes) The node keeps its contacts, messages and settings.")
-                } else {
-                    Text("It takes a few minutes. Keep the node near this device. If the link drops, the update goes on when the node is back. At the end the node restarts, and keeps its contacts, messages and settings.")
-                }
-            }
         }
     }
 
@@ -736,6 +722,25 @@ struct NodeView: View {
         }
     }
 
+    /// Asks before an update, on the button that offers it: a dialog attached to the dashboard is
+    /// not shown over the Firmware page that the dashboard opens.
+    private func confirmsUpdate(_ button: some View) -> some View {
+        button.confirmationDialog(
+            confirmingUpdate.map { "Update the node to \($0.release)?" } ?? "",
+            isPresented: Binding(get: { confirmingUpdate != nil }, set: { if !$0 { confirmingUpdate = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Update") { model.update() }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            if confirmingUpdate?.image.update == .bootloader {
+                Text("The node restarts into its bootloader, which takes the new firmware over Bluetooth. \(Words.bootloaderUpdateTakes) The node keeps its contacts, messages and settings.")
+            } else {
+                Text("It takes a few minutes. Keep the node near this device. If the link drops, the update goes on when the node is back. At the end the node restarts, and keeps its contacts, messages and settings.")
+            }
+        }
+    }
+
     @ViewBuilder
     private var updateStatus: some View {
         switch model.firmwareStatus {
@@ -751,13 +756,15 @@ struct NodeView: View {
             switch offer.comparison {
             case .newer:
                 LabeledContent("Available", value: offer.release)
-                Button("Update to \(offer.release)…") { confirmingUpdate = offer }
-                    .disabled(!model.isReady)
+                confirmsUpdate(
+                    Button("Update to \(offer.release)…") { confirmingUpdate = offer }
+                        .disabled(!model.isReady))
             case .unknown:
                 Text("Release \(offer.release) is available. The node does not say which release it runs, so the app cannot tell whether it is newer.")
                     .foregroundStyle(.secondary)
-                Button("Install \(offer.release)…") { confirmingUpdate = offer }
-                    .disabled(!model.isReady)
+                confirmsUpdate(
+                    Button("Install \(offer.release)…") { confirmingUpdate = offer }
+                        .disabled(!model.isReady))
             case .same:
                 Text("Up to date: \(offer.release) is the latest release.").foregroundStyle(.secondary)
                 Button("Check Again") { model.checkForUpdate() }
