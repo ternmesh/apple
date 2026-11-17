@@ -52,7 +52,8 @@ struct ChatsView: View {
                 }
             }
             .navigationTitle("Chats")
-            .searchable(text: $query)
+            .nodeStatus()
+            .searchable(text: $query, prompt: "Search messages")
             .navigationDestination(for: Peer.self) { peer in
                 ChatView(peer: peer)
             }
@@ -98,29 +99,32 @@ struct ChatsView: View {
 
 struct ConversationRow: View {
     let conversation: Conversation
+    @EnvironmentObject private var model: NodeModel
 
     var body: some View {
-        HStack(alignment: .top) {
-            Image(systemName: isGroup ? "person.3" : "person")
-                .foregroundStyle(.secondary)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(conversation.name).font(.headline).lineLimit(1)
+        let unread = conversation.unread > 0
+        HStack(spacing: 12) {
+            Avatar(name: conversation.name, key: avatarKey(conversation.peer), group: isGroup, size: 46)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(conversation.name)
+                        .font(.body.weight(unread ? .bold : .semibold))
+                        .lineLimit(1)
+                    if isGroup { Tag("Group") }
                     Spacer()
                     if let last = conversation.last, last.time != 0 {
                         Text(date(last.time), format: .dateTime.hour().minute())
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(unread ? Color.accentColor : Color.secondary)
                     }
                 }
                 HStack {
-                    Text(conversation.last?.summary ?? "No messages yet")
+                    Text(preview)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .foregroundStyle(unread ? Color.primary : Color.secondary)
+                        .lineLimit(1)
                     Spacer()
-                    if conversation.unread > 0 {
+                    if unread {
                         Text("\(conversation.unread)")
                             .font(.caption.bold())
                             .foregroundStyle(.white)
@@ -131,7 +135,16 @@ struct ConversationRow: View {
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
+    }
+
+    /// The last thing said, with who said it: "You:" for the user, and in a group the writer, by
+    /// the contact whose routing id it claimed or by the id.
+    private var preview: String {
+        guard let last = conversation.last else { return "No messages yet" }
+        if !last.isReceived { return "You: \(last.summary)" }
+        if case let .groupMessage(m) = last { return "\(Words.sender(m.from, names: model.routingNames)): \(last.summary)" }
+        return last.summary
     }
 
     private var isGroup: Bool {

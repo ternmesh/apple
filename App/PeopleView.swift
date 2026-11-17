@@ -1,13 +1,18 @@
-// The contacts the node holds, the addresses it refused because they were not among them, and the
-// way to who is about. Saving an address as a contact is what lets it in: the node takes it the
+// The People tab: the contacts the node holds, the addresses it refused because they were not
+// among them, and, beside them, who is near. Saving an address as a contact is what lets it in: the node takes it the
 // next time it asks. A contact is added from the QR code on its owner's node screen, their link,
 // the address, or their card, and shows the short code its owner can check against their own.
 
 import SwiftUI
 import TernKit
 
-struct ContactsView: View {
+struct PeopleView: View {
+    enum Half: Hashable { case contacts, nearby }
+
     @EnvironmentObject private var model: NodeModel
+    @State private var half = Half.contacts
+    /// The card of someone near the user is adding as a contact.
+    @State private var addingCard: Card?
     @State private var adding = false
     @State private var renaming: Contact?
     @State private var name = ""
@@ -17,18 +22,24 @@ struct ContactsView: View {
     var body: some View {
         NavigationStack {
             List {
-                if model.speaksCards {
-                    SwiftUI.Section {
-                        NavigationLink(value: WhoIsAbout()) {
-                            Label("Who's About", systemImage: "person.wave.2")
-                        }
-                        .badge(model.records.cards.count)
+                SwiftUI.Section {
+                    Picker("Show", selection: $half) {
+                        Text("Contacts").tag(Half.contacts)
+                        Text(nearCount > 0 ? "Nearby · \(nearCount)" : "Nearby").tag(Half.nearby)
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                 }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+                if half == .nearby {
+                    NearbySections(adding: $addingCard)
+                } else {
                 AskedSection(saving: $saving)
-                SwiftUI.Section("Contacts") {
+                SwiftUI.Section {
                     if model.records.contacts.isEmpty {
-                        Text("No contacts yet.").foregroundStyle(.secondary)
+                        Text("No contacts yet. Add one with the button above, by scanning the code under My Address on their Node tab, or from their link.")
+                            .foregroundStyle(.secondary)
                     }
                     ForEach(sortedContacts(model.records), id: \.address) { c in
                         NavigationLink(value: Peer.contact(c.address)) {
@@ -47,13 +58,12 @@ struct ContactsView: View {
                         }
                     }
                 }
+                }
             }
-            .navigationTitle("Contacts")
+            .navigationTitle("People")
+            .nodeStatus()
             .navigationDestination(for: Peer.self) { peer in
                 ChatView(peer: peer)
-            }
-            .navigationDestination(for: WhoIsAbout.self) { _ in
-                WhoIsAboutView()
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -66,6 +76,12 @@ struct ContactsView: View {
                 }
             }
             .sheet(isPresented: $adding) { AddContactSheet() }
+            .sheet(item: $addingCard) { c in
+                AddContactSheet(
+                    text: Sharing.text(c.address), name: c.name,
+                    nameNote: c.name.isEmpty ? nil : "Their card says “\(c.name)”. Save them under any name you like.")
+                    .environmentObject(model)
+            }
             .sheet(item: $showing) { c in
                 CodeSheet(title: c.name.isEmpty ? c.address.short : c.name, address: c.address)
             }
@@ -84,6 +100,12 @@ struct ContactsView: View {
         }
     }
 
+    /// How many are near: the cards the node holds, and the neighbours that sent none.
+    private var nearCount: Int {
+        let cards = model.speaksCards ? Set(model.records.cards.keys.map(\.routingId)) : []
+        return cards.count + model.records.neighbours.keys.filter { !cards.contains($0) }.count
+    }
+
     private func rename(_ c: Contact) {
         name = c.name
         renaming = c
@@ -92,16 +114,24 @@ struct ContactsView: View {
 
 struct ContactRow: View {
     let contact: Contact
+    @EnvironmentObject private var model: NodeModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(contact.name.isEmpty ? contact.address.short : contact.name)
-            HStack {
-                Text(Sharing.shortCode(contact.address)).font(.caption.monospaced())
-                Text(contact.session == 1 ? "Session: yes" : "Session: no").font(.caption)
+        let name = contact.name.isEmpty ? contact.address.short : contact.name
+        HStack(spacing: 12) {
+            Avatar(name: name, key: contact.address.description)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name).fontWeight(.semibold)
+                Text(contact.session == 1 ? "Secure" : "Not talked yet")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
-            .foregroundStyle(.secondary)
+            Spacer()
+            if let n = model.records.neighbours[contact.address.routingId] {
+                SignalBars(quarterDb: n.snrQuarterDb)
+            }
         }
+        .padding(.vertical, 2)
     }
 }
 

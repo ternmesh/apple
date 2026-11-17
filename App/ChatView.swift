@@ -94,14 +94,16 @@ struct ChatView: View {
                 sharingLocation = true
             } label: {
                 Label("Sharing your location · \(PositionWords.sharing(s))", systemImage: "location.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.opacity(0.12)))
+                    .padding(.horizontal, 12)
+                    .padding(.top, 6)
             }
             .buttonStyle(.plain)
             .disabled(!model.isConnected)
-            Divider()
         }
     }
 
@@ -117,9 +119,21 @@ struct ChatView: View {
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if canWrite {
+                if canShareLocation {
+                    Button { sharingLocation = true } label: {
+                        Image(systemName: "location").font(.title3)
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.bottom, 6)
+                    .disabled(!model.isConnected)
+                    .accessibilityLabel("Share My Location")
+                }
                 TextField("Message", text: $draft, axis: .vertical)
                     .lineLimit(1...5)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(Capsule().fill(Color.theirs))
                     .onSubmit(send)
                 if bytes > Companion.textMax - 28 {
                     Text("\(bytes)/\(Companion.textMax)")
@@ -128,7 +142,7 @@ struct ChatView: View {
                         .padding(.bottom, 6)
                 }
                 Button(action: send) {
-                    Image(systemName: "arrow.up.circle.fill").font(.title2)
+                    Image(systemName: "arrow.up.circle.fill").font(.largeTitle)
                 }
                 .buttonStyle(.borderless)
                 .disabled(!canSend)
@@ -139,6 +153,15 @@ struct ChatView: View {
             }
         }
         .padding(10)
+    }
+
+    /// The node shares only with its contacts, and with a group only while it holds it.
+    private var canShareLocation: Bool {
+        guard model.speaksPositions else { return false }
+        switch peer {
+        case let .contact(a): return model.records.contacts[a] != nil
+        case let .group(g): return model.records.groups[g] != nil
+        }
     }
 
     private var canSend: Bool {
@@ -253,16 +276,17 @@ struct ItemBubble: View {
                 if let from {
                     let named = model.routingNames[from] != nil
                     Text(Words.sender(from, names: model.routingNames))
-                        .font(named ? .caption : .caption.monospaced())
-                        .foregroundStyle(.secondary)
+                        .font(named ? .caption.weight(.semibold) : .caption.monospaced())
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.leading, 4)
                         .help(Words.routingId(from))
                 }
                 content
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
                     .background(
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(item.isReceived ? Color.secondary.opacity(0.15) : Color.accentColor))
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(item.isReceived ? Color.theirs : Color.mine))
                     .foregroundStyle(item.isReceived ? Color.primary : Color.white)
                 footer
             }
@@ -328,7 +352,7 @@ struct OutgoingBubble: View {
                 Text(outgoing.text)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 16).fill(Color.accentColor.opacity(0.5)))
+                    .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.mine.opacity(0.55)))
                     .foregroundStyle(Color.white)
                 switch outgoing.status {
                 case .sending:

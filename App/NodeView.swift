@@ -1,6 +1,8 @@
-// The node itself: its address, as a QR code, a link and the short code; its battery and airtime,
-// the neighbours it hears, its settings, its presence card, and its firmware; and turning it off. A
-// setting changed here is shown once the node's SELF says so, not before.
+// The node itself, as a dashboard: its name, link, battery and airtime at the head, then a row for
+// each thing about it, each opening a screen of its own: its address to give others, the nodes it
+// hears, its radio, what it shows of itself, its pairing PIN, and its firmware; and, last,
+// switching to another node and turning it off. A setting changed here is shown once the node's
+// SELF says so, not before.
 
 import SwiftUI
 import TernKit
@@ -19,6 +21,8 @@ struct NodeView: View {
     @State private var label = ""
     /// The card of a neighbour the user is adding as a contact.
     @State private var adding: Card?
+    /// Finding and connecting to another node, over the dashboard.
+    @State private var switching = false
 
     /// The profiles a node is set to by name, each with where it is for. A node refuses one it does
     /// not have.
@@ -37,25 +41,30 @@ struct NodeView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if let me = model.records.me {
-                    if model.asksForPasskey && model.isConnected { choosePasskey }
-                    identity(me)
-                    battery
-                    airtime
-                    settings(me)
-                    card(me)
-                    receiver
-                    neighbours
-                } else {
-                    Text(model.isConnected ? "Waiting for the node…" : "Connect to a node to see it here.")
-                        .foregroundStyle(.secondary)
+                if model.records.me != nil && model.asksForPasskey && model.isConnected { choosePasskey }
+                SwiftUI.Section {
+                    hero
                 }
-                software
-                firmwareUpdate
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                pages
+                SwiftUI.Section {
+                    Button {
+                        switching = true
+                    } label: {
+                        SettingRow(title: "Switch Node", symbol: "arrow.left.arrow.right", tint: .gray)
+                    }
+                    .foregroundStyle(Color.primary)
+                }
                 turnOff
             }
             .formStyle(.grouped)
-            .navigationTitle(model.nodeName ?? "Node")
+            .navigationTitle("Node")
+            .sheet(isPresented: $switching) {
+                ConnectView()
+                    .environmentObject(model)
+                    .frame(minWidth: 380, minHeight: 480)
+            }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Rename") {
@@ -109,6 +118,212 @@ struct NodeView: View {
         }
     }
 
+    // MARK: The dashboard
+
+    /// The head of the dashboard: the node's name, what the link is doing, its battery and airtime
+    /// as meters, and the two things done most often from here, giving its address and connecting.
+    private var hero: some View {
+        let on = Color.white
+        return VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.nodeName ?? "Tern node")
+                    .font(.title2.weight(.semibold))
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Circle().fill(model.isConnected ? Color(hex: 0x9FF0C6) : Color(hex: 0xFFD08A)).frame(width: 8, height: 8)
+                    Text(heroLine).font(.footnote).opacity(0.85).lineLimit(1)
+                }
+            }
+            if model.records.power != nil || model.records.airtime != nil {
+                HStack(spacing: 10) {
+                    gauge("Battery", value: batteryValue, fraction: batteryFraction, hint: batteryHint)
+                    gauge("Airtime", value: airtimeValue, fraction: airtimeFraction, hint: airtimeHint)
+                }
+            }
+            HStack(spacing: 10) {
+                if let me = model.records.me {
+                    NavigationLink {
+                        page("My Address") { address(me) }
+                    } label: {
+                        heroButton("My Address", symbol: "qrcode")
+                    }
+                    .buttonStyle(.plain)
+                }
+                if model.disconnected || model.turnedOff {
+                    Button { model.retry() } label: { heroButton("Connect", symbol: "link") }.buttonStyle(.plain)
+                } else {
+                    Button { model.disconnect() } label: { heroButton("Disconnect", symbol: "personalhotspot.slash") }
+                        .buttonStyle(.plain)
+                }
+            }
+        }
+        .foregroundStyle(on)
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(LinearGradient(colors: [.heroTop, .heroBottom], startPoint: .topLeading, endPoint: .bottomTrailing)))
+    }
+
+    private var heroLine: String {
+        var parts = [model.isConnected ? "Connected" : words(model.linkState, turnedOff: model.turnedOff)]
+        if let board = model.board, !board.isEmpty { parts.append(board) }
+        if let me = model.records.me { parts.append(Words.role(me.role)) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func gauge(_ label: String, value: String, fraction: Double?, hint: String?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.caption.weight(.medium)).opacity(0.85)
+            Text(value).font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1)
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.25))
+                    if let fraction { Capsule().fill(Color.white).frame(width: max(6, g.size.width * fraction)) }
+                }
+            }
+            .frame(height: 6)
+            if let hint { Text(hint).font(.caption2).opacity(0.85).lineLimit(2) }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.13)))
+    }
+
+    private func heroButton(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol)
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.18)))
+            .contentShape(Rectangle())
+    }
+
+    private var batteryValue: String {
+        guard let p = model.records.power, p.percent <= 100 else { return "Unknown" }
+        return "\(p.percent)%"
+    }
+
+    private var batteryFraction: Double? {
+        guard let p = model.records.power, p.percent <= 100 else { return nil }
+        return Double(p.percent) / 100
+    }
+
+    private var batteryHint: String? {
+        guard let p = model.records.power else { return nil }
+        if p.flags & 1 != 0 { return "Charging" }
+        if p.flags & 2 != 0 { return "On external power" }
+        return p.millivolts == 0 ? nil : volts(p.millivolts)
+    }
+
+    private var airtimeValue: String {
+        guard let a = model.records.airtime else { return "Unknown" }
+        if a.period == 0 { return "No limit" }
+        return "\(min(100, Int(a.used) * 100 / Int(max(a.allowed, 1))))%"
+    }
+
+    private var airtimeFraction: Double? {
+        guard let a = model.records.airtime, a.period != 0 else { return nil }
+        return min(1, Double(a.used) / Double(max(a.allowed, 1)))
+    }
+
+    private var airtimeHint: String? {
+        guard let a = model.records.airtime else { return nil }
+        if a.wait > 0 { return "Next long frame in \(seconds(a.wait))" }
+        if a.period == 0 { return "This region has no limit" }
+        if a.used * 10 >= a.allowed * 9 { return "Nearly used up" }
+        if a.used * 2 >= a.allowed { return "Over half used" }
+        return "Plenty left to send"
+    }
+
+    /// A row for each screen the dashboard opens, with what it is set to now.
+    @ViewBuilder
+    private var pages: some View {
+        SwiftUI.Section {
+            NavigationLink {
+                page("Nearby Nodes") { neighbours }
+            } label: {
+                SettingRow(
+                    title: "Nearby Nodes", symbol: "waveform.path.ecg", tint: Color(hex: 0x0F766E),
+                    value: model.records.neighbours.isEmpty ? "None heard" : "\(model.records.neighbours.count) heard")
+            }
+            if let me = model.records.me {
+                NavigationLink {
+                    page("Radio") { radio }
+                } label: {
+                    SettingRow(
+                        title: "Radio", symbol: "dot.radiowaves.left.and.right", tint: Color(hex: 0x0B4F6C),
+                        value: "\(me.region.isEmpty ? "Not set" : me.region) · \(Words.role(me.role))",
+                        valueColor: me.region.isEmpty ? .red : .secondary)
+                }
+            }
+            if hasPrivacy {
+                NavigationLink {
+                    page("Privacy & Location") {
+                        if let me = model.records.me { card(me) }
+                        receiver
+                    }
+                } label: {
+                    SettingRow(
+                        title: "Privacy & Location", symbol: "eye", tint: Color(hex: 0x7C3AED),
+                        value: model.records.me?.cards.map { $0 == 1 ? "Card on" : "Card off" })
+                }
+            }
+            if let me = model.records.me {
+                NavigationLink {
+                    page("Bluetooth PIN") { pin }
+                } label: {
+                    SettingRow(
+                        title: "Bluetooth PIN", symbol: "lock", tint: Color(hex: 0xB45309),
+                        value: me.pairing.map(Self.pairingShort),
+                        valueColor: me.pairing == NodeSelf.pairingDefault ? .warn : .secondary)
+                }
+            }
+        }
+        if model.firmware != nil {
+            SwiftUI.Section {
+                NavigationLink {
+                    page("Firmware") {
+                        firmwareUpdate
+                        software
+                    }
+                } label: {
+                    SettingRow(
+                        title: "Firmware", symbol: "cpu", tint: .gray,
+                        value: updateReady ? "Update ready" : model.release.flatMap { $0.isEmpty ? nil : $0 },
+                        valueColor: updateReady ? .accentColor : .secondary)
+                }
+            }
+        }
+    }
+
+    /// A screen the dashboard opens: a form of its sections, with the same alerts as the dashboard.
+    private func page(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        Form { content() }
+            .formStyle(.grouped)
+            .navigationTitle(title)
+            .showsProblems()
+    }
+
+    private var hasPrivacy: Bool {
+        (model.speaksCards && model.records.me?.cards != nil) || (model.ownFix.map { $0.receiver != NodeFix.none } ?? false)
+    }
+
+    private var updateReady: Bool {
+        if case let .found(offer) = model.firmwareStatus { return offer.comparison == .newer }
+        return false
+    }
+
+    /// How the node pairs, in a word or two, for its row.
+    static func pairingShort(_ pairing: UInt8) -> String {
+        switch pairing {
+        case NodeSelf.pairingShown: "On its screen"
+        case NodeSelf.pairingDefault: "Default"
+        case NodeSelf.pairingSet: "Your own"
+        default: "Unknown"
+        }
+    }
+
     // MARK: Sections
 
     /// Asks the user to choose a passkey for a node without a screen, which pairs with the default
@@ -146,120 +361,156 @@ struct NodeView: View {
         }
     }
 
-    private func identity(_ me: NodeSelf) -> some View {
+    /// The node's address: its QR code to scan, the short code to read out, and the link to send.
+    @ViewBuilder
+    private func address(_ me: NodeSelf) -> some View {
         SwiftUI.Section {
             QRCodeView(address: me.address)
                 .frame(maxWidth: .infinity)
-            LabeledContent("Short code") {
-                Text(Sharing.shortCode(me.address)).font(.body.monospaced()).textSelection(.enabled)
-            }
-            Text(Sharing.grouped(me.address))
-                .font(.body.monospaced())
-                .textSelection(.enabled)
-            HStack {
-                Button("Copy") { copyToClipboard(Sharing.text(me.address)) }
-                ShareLink(item: Sharing.link(me.address))
-            }
-            .buttonStyle(.borderless)
-            LabeledContent("Role", value: Words.role(me.role))
-            LabeledContent("Region", value: me.region.isEmpty ? "Not set" : me.region)
-            LabeledContent("Power", value: me.most == 1 ? "\(me.power) dBm, the most it may" : "\(me.power) dBm")
-            LabeledContent("Clock", value: me.time == 0 ? "Not set" : date(me.time).formatted(date: .abbreviated, time: .shortened))
-        } header: {
-            Text("Address")
         } footer: {
             Text("Someone with Tern scans the code to add you as a contact; a phone without it opens a page on "
-                + "ternmesh.org that shows the address. Read out the short code to them: the one their phone "
-                + "shows should be the same.")
+                + "ternmesh.org that shows the address.")
         }
-    }
-
-    @ViewBuilder
-    private var battery: some View {
-        if let p = model.records.power {
-            SwiftUI.Section("Battery") {
-                LabeledContent("Charge", value: p.percent == 255 ? "Unknown" : "\(p.percent)%")
-                LabeledContent("Voltage", value: p.millivolts == 0 ? "Unknown" : volts(p.millivolts))
-                if p.flags & 1 != 0 { Text("Charging") }
-                if p.flags & 2 != 0 { Text("On external power") }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var airtime: some View {
-        if let a = model.records.airtime {
-            SwiftUI.Section("Airtime") {
-                if a.period == 0 {
-                    Text("This region has no limit on transmitting.")
-                } else {
-                    LabeledContent(
-                        "Used",
-                        value: "\(seconds(a.used)) of \(seconds(a.allowed)) per \(Words.duration(a.period))")
-                    ProgressView(value: Double(min(a.used, a.allowed)), total: Double(max(a.allowed, 1)))
-                    if a.wait > 0 {
-                        LabeledContent("Next long frame", value: "in \(seconds(a.wait))")
-                    }
-                }
-            }
-        }
-    }
-
-    private func settings(_ me: NodeSelf) -> some View {
         SwiftUI.Section {
-            Picker("Region", selection: Binding(get: { me.region }, set: { model.set(.region($0)) })) {
-                if !Self.regions.contains(where: { $0.name == me.region }) {
-                    Text(me.region.isEmpty ? "Not set" : me.region).tag(me.region)
+            Text(Sharing.shortCode(me.address))
+                .font(.title.monospaced().weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .textSelection(.enabled)
+            HStack {
+                ShareLink(item: Sharing.link(me.address)) { Label("Share Link", systemImage: "square.and.arrow.up") }
+                    .buttonStyle(.borderedProminent)
+                Button { copyToClipboard(Sharing.text(me.address)) } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    .buttonStyle(.bordered)
+            }
+            .frame(maxWidth: .infinity)
+        } header: {
+            Text("Short code")
+        } footer: {
+            Text("Read this out to someone adding you: the code their phone shows should be the same.")
+        }
+        SwiftUI.Section("Full address") {
+            Text(Sharing.grouped(me.address))
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+
+    /// Where the node is, which it transmits by; whether it passes on others' frames; and how loud.
+    @ViewBuilder
+    private var radio: some View {
+        if let me = model.records.me {
+            SwiftUI.Section {
+                Picker("Region", selection: Binding(get: { me.region }, set: { model.set(.region($0)) })) {
+                    if !Self.regions.contains(where: { $0.name == me.region }) {
+                        Text(me.region.isEmpty ? "Not set" : me.region).tag(me.region)
+                    }
+                    ForEach(Self.regions, id: \.name) { Text($0.name).tag($0.name) }
                 }
-                ForEach(Self.regions, id: \.name) { Text($0.name).tag($0.name) }
+                // An image is for one region, and a new region restarts the node: not while one is on its way.
+                .disabled(model.firmwareStatus.isTransferring)
+                if let detail = Self.regions.first(where: { $0.name == me.region })?.detail {
+                    Text(detail).font(.footnote).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Region")
+            } footer: {
+                Text("Use the region you are in. It sets the frequencies your node uses and how long it may transmit.")
             }
-            // An image is for one region, and a new region restarts the node: not while one is on its way.
-            .disabled(model.firmwareStatus.isTransferring)
-            Picker("Role", selection: Binding(get: { me.role }, set: { model.set(.role($0)) })) {
-                Text("Leaf").tag(UInt8(0))
-                Text("Relay").tag(UInt8(1))
+            .disabled(!model.isConnected)
+
+            SwiftUI.Section("Role") {
+                roleChoice(
+                    "Just me", tag: "Leaf", role: 0, current: me.role,
+                    detail: "Sends and receives your own messages, and uses the least battery. Best for a node you carry.")
+                roleChoice(
+                    "Help the mesh", tag: "Relay", role: 1, current: me.role,
+                    detail: "Also passes on other people's messages, so the mesh reaches further. Best for a node left on a hill, at a hut or in a window.")
             }
-            .pickerStyle(.segmented)
-            Stepper("Power: \(power) dBm", value: $power, in: -9...30)
-            // A number the user sets is kept when the region changes, where the most moves with
-            // it: so while the node sends at the most, even the number it sends at now is worth
-            // setting.
-            if power != Int(me.power) || me.most == 1 {
-                Button("Set Power to \(power) dBm") { model.set(.power(Int8(power))) }
+            .disabled(!model.isConnected)
+
+            SwiftUI.Section {
+                Stepper("\(power) dBm\(me.most == 1 && power == Int(me.power) ? ", the most it may" : "")", value: $power, in: -9...30)
+                    .monospacedDigit()
+                // A number the user sets is kept when the region changes, where the most moves with
+                // it: so while the node sends at the most, even the number it sends at now is worth
+                // setting.
+                if power != Int(me.power) || me.most == 1 {
+                    Button("Set Power to \(power) dBm") { model.set(.power(Int8(power))) }
+                }
+                // The most the node may transmit at, which it works out for its board, its antenna and
+                // its region, and works out again when the region changes.
+                if model.speaksMost && me.most != 1 {
+                    Button("Send at the Most It May") { model.set(.power(Companion.powerMost)) }
+                }
+            } header: {
+                Text("Transmit power")
+            } footer: {
+                Text("Your node may restart to apply a change. The app connects again on its own.")
             }
-            // The most the node may transmit at, which it works out for its board, its antenna and
-            // its region, and works out again when the region changes.
-            if model.speaksMost && me.most != 1 {
-                Button("Send at the Most It May") { model.set(.power(Companion.powerMost)) }
+            .disabled(!model.isConnected)
+        }
+    }
+
+    private func roleChoice(_ title: String, tag: String, role: UInt8, current: UInt8, detail: String) -> some View {
+        Button {
+            if role != current { model.set(.role(role)) }
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: role == current ? "largecircle.fill.circle" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(role == current ? Color.accentColor : Color.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(title).fontWeight(.semibold)
+                        Tag(tag)
+                    }
+                    Text(detail).font(.footnote).foregroundStyle(.secondary)
+                }
             }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(role == current ? .isSelected : [])
+    }
+
+    /// How the node pairs, and choosing another PIN.
+    @ViewBuilder
+    private var pin: some View {
+        if let me = model.records.me {
             // How the node pairs, from a node of version 11 or later: before it, SELF does not say.
             if let pairing = me.pairing {
-                LabeledContent("PIN", value: Self.pairing(pairing))
-            }
-            TextField("PIN, 6 digits", text: $passkey)
-            #if os(iOS)
-                .keyboardType(.numberPad)
-            #endif
-            HStack {
-                Button("Set PIN") {
-                    if let key = Self.passkey(passkey) { model.setPasskey(key) }
-                    passkey = ""
+                SwiftUI.Section("Pairs with") {
+                    Text(Self.pairing(pairing))
+                        .foregroundStyle(pairing == NodeSelf.pairingDefault ? Color.warn : Color.primary)
                 }
-                .disabled(Self.passkey(passkey) == nil)
-                Spacer()
-                // The node's default: a new passkey on its screen each time, or 123456 on a node
-                // without one. Nothing to go back to while it pairs with the default already.
-                Button("Use Default") { model.set(.passkey(Companion.passkeyDefault)) }
-                    .disabled(me.pairing == NodeSelf.pairingShown || me.pairing == NodeSelf.pairingDefault)
             }
-            .buttonStyle(.borderless)
-        } header: {
-            Text("Settings")
-        } footer: {
-            Text("The node may restart to apply a setting; the app connects again. A new PIN takes effect the next time a device pairs. "
-                + "By default a node with a screen shows a new PIN each time, and one without a screen uses \(Companion.screenlessPasskey).")
+            SwiftUI.Section {
+                TextField("PIN, 6 digits", text: $passkey)
+                #if os(iOS)
+                    .keyboardType(.numberPad)
+                #endif
+                HStack {
+                    Button("Set PIN") {
+                        if let key = Self.passkey(passkey) { model.setPasskey(key) }
+                        passkey = ""
+                    }
+                    .disabled(Self.passkey(passkey) == nil)
+                    Spacer()
+                    // The node's default: a new passkey on its screen each time, or 123456 on a node
+                    // without one. Nothing to go back to while it pairs with the default already.
+                    Button("Use Default") { model.set(.passkey(Companion.passkeyDefault)) }
+                        .disabled(me.pairing == NodeSelf.pairingShown || me.pairing == NodeSelf.pairingDefault)
+                }
+                .buttonStyle(.borderless)
+            } header: {
+                Text("Set a new PIN")
+            } footer: {
+                Text("A new PIN takes effect the next time a device pairs; this one stays paired. "
+                    + "By default a node with a screen shows a new PIN each time, and one without a screen uses \(Companion.screenlessPasskey).")
+            }
+            .disabled(!model.isConnected)
         }
-        .disabled(!model.isConnected)
     }
 
     /// The node's presence card: off until the user turns it on, and the name it carries, which the
@@ -297,7 +548,7 @@ struct NodeView: View {
             } footer: {
                 Text("Anyone near can see this node's address and the name above, every couple of hours, "
                     + "while the card is on. It is off until you turn it on. The cards of others show "
-                    + "under Who's About in Contacts either way.")
+                    + "under People, Nearby, either way.")
             }
             .disabled(!model.isConnected)
         }
@@ -358,13 +609,13 @@ struct NodeView: View {
     }
 
     /// The nodes the node hears. Each is named, if it can be, by a contact's routing id, else by a
-    /// card the node holds, as the claim it is, which offers to add them as a contact as Who's About
+    /// card the node holds, as the claim it is, which offers to add them as a contact as People's Nearby
     /// does; one with neither stays a routing id.
     @ViewBuilder
     private var neighbours: some View {
         let list = model.records.neighbours.values.sorted { $0.heard < $1.heard }
         let cards = model.records.routingCards
-        SwiftUI.Section("Neighbours") {
+        SwiftUI.Section {
             if list.isEmpty {
                 Text("The node hears no other nodes yet.").foregroundStyle(.secondary)
             }
@@ -408,6 +659,8 @@ struct NodeView: View {
                     }
                 }
             }
+        } footer: {
+            Text("Bars show how clearly your node hears each one: four is strong, one is at the edge of range.")
         }
         .sheet(item: $adding) { c in
             AddContactSheet(
@@ -419,21 +672,27 @@ struct NodeView: View {
 
     /// What a neighbour is, how well it is heard and how long ago.
     private func heard(_ n: Neighbour) -> some View {
-        Text("\(Words.role(n.role)), SNR \(Words.snr(n.snrQuarterDb)), heard \(Words.duration(UInt32(n.heard))) ago")
-            .font(.caption)
-            .foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            SignalBars(quarterDb: n.snrQuarterDb)
+            Text("\(Words.role(n.role)) · \(Words.snr(n.snrQuarterDb)) · heard \(Words.duration(UInt32(n.heard))) ago")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder
     private var software: some View {
         if let firmware = model.firmware {
-            SwiftUI.Section("Software") {
+            SwiftUI.Section("This node") {
                 LabeledContent("Firmware", value: firmware)
                 if let v = model.nodeVersion {
                     LabeledContent("Companion protocol", value: "version \(v)")
                 }
                 if let v = model.agreed {
                     LabeledContent("Spoken with this app", value: "version \(v)")
+                }
+                if let me = model.records.me {
+                    LabeledContent("Clock", value: me.time == 0 ? "Not set" : date(me.time).formatted(date: .abbreviated, time: .shortened))
                 }
             }
         }
