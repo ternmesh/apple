@@ -41,24 +41,23 @@ struct TernApp: App {
     }
 }
 
-/// Tabs on iPhone and iPad, a sidebar on a Mac.
+/// Tabs on iPhone and iPad, a sidebar on a Mac: the same four on both. Finding a node is not one
+/// of them: it is the whole window until a node is chosen, and the Node tab's Switch Node after.
 struct RootView: View {
     enum Pane: String, CaseIterable, Identifiable {
         case chats = "Chats"
-        case contacts = "Contacts"
+        case people = "People"
         case map = "Map"
         case node = "Node"
-        case connect = "Connect"
 
         var id: String { rawValue }
 
         var icon: String {
             switch self {
             case .chats: "bubble.left.and.bubble.right"
-            case .contacts: "person.2"
+            case .people: "person.2"
             case .map: "map"
             case .node: "antenna.radiowaves.left.and.right"
-            case .connect: "dot.radiowaves.left.and.right"
             }
         }
     }
@@ -67,7 +66,15 @@ struct RootView: View {
     @State private var section: Pane?
 
     var body: some View {
-        panes
+        Group {
+            // No node chosen yet: finding one is all there is to do.
+            if model.remembered == nil {
+                ConnectView()
+            } else {
+                panes
+            }
+        }
+        .environment(\.showNode, { section = .node })
             // Over every screen, until it is done or skipped; it closes itself when the link drops.
             .sheet(isPresented: Binding(get: { model.needsSetup }, set: { _ in })) {
                 SetupView().environmentObject(model)
@@ -125,7 +132,7 @@ struct RootView: View {
             screen(section ?? .chats)
                 .id(section ?? .chats)
         }
-        .onAppear { if section == nil { section = model.remembered == nil ? .connect : .chats } }
+        .onAppear { if section == nil { section = .chats } }
         #else
         TabView(selection: Binding(get: { section ?? .chats }, set: { section = $0 })) {
             ForEach(Pane.allCases) { s in
@@ -135,7 +142,7 @@ struct RootView: View {
                     .tag(s)
             }
         }
-        .onAppear { if section == nil { section = model.remembered == nil ? .connect : .chats } }
+        .onAppear { if section == nil { section = .chats } }
         #endif
     }
 
@@ -144,10 +151,9 @@ struct RootView: View {
     private func screen(_ s: Pane) -> some View {
         switch s {
         case .chats: ChatsView()
-        case .contacts: ContactsView()
+        case .people: PeopleView()
         case .map: MapView()
         case .node: NodeView()
-        case .connect: ConnectView()
         }
     }
 }

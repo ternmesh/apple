@@ -44,7 +44,7 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 | `Sources/TernKit/Update/Release.swift` | The release manifest at `ternmesh.org/firmware/latest.json`, the image in it for a node's board and region, and Semantic Versioning's order, with the little JSON it needs. |
 | `Sources/TernKit/Update/SHA256.swift` | SHA-256, for an image's digest: TernKit's own, so that it keeps to the standard library. |
 | `Sources/TernKit/Bluetooth/BluetoothLink.swift` | Core Bluetooth: scanning, connecting, pairing, the MTU, a frame to each write and notification, reconnecting to the remembered node, and restoring in the background. Built only where Core Bluetooth is. |
-| `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, the firmware it downloads and sends, and the phone's position given to the node while it shares, from `LocationFeed`), `Notifications` (a tap or a reply on one), and the Connect, Chats, chat, Contacts, Who's About, Map and Node screens, with the share sheet. The map is MapKit's own view (`PositionMap`), which draws a cell before iOS 17 and macOS 14. |
+| `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, the firmware it downloads and sends, and the phone's position given to the node while it shares, from `LocationFeed`), `Notifications` (a tap or a reply on one), and the screens: Connect (the whole window until a node is chosen, then Switch Node), and the Chats, People (contacts, and who is near), Map and Node tabs, the node's dashboard with a screen for each thing about it, with the share sheet. `Design` holds what they share: avatars, signal bars and the node's status pill. The map is MapKit's own view (`PositionMap`), which draws a cell before iOS 17 and macOS 14. |
 | `project.yml` | The Xcode project, for XcodeGen: one target for iOS and macOS. |
 | `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, frames of later versions in `unknown_to_older`, and the updater as the client in `update`. The records file, conversations and `READ`'s rule, routing ids against routing.md's vectors; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
 
@@ -92,14 +92,14 @@ From a node of version 11, the Node tab says how the node pairs: a new PIN (the 
 passkey) on its screen, the default 123456 of a node without a screen, or one the user set. While a
 node pairs with 123456, which anyone nearby who knows it can pair with too, an alert over whichever
 screen is showing asks the user once each connection to choose their own, and Choose PIN goes to the
-Node tab, which asks for it. Use Default goes back to the node's default.
+Node tab, which asks for it; the PIN is changed later under Node, Bluetooth PIN. Use Default goes back to the node's default.
 
 Cards are per [draft/cards.md](https://github.com/ternmesh/spec/blob/main/draft/cards.md), with a
-node of version 6 or later. Who's About, reached from Contacts, lists the cards the node holds, the
+node of version 6 or later. People's Nearby lists the cards the node holds, the
 most recently heard first: each card's name in quotes, as its sender's claim, beside its address's
 short code, and never in place of a contact's name. A contact's card opens its conversation, and
 anyone else's opens Add Contact with the address and the card's name in it, to keep or change.
-The node's own card is turned on and named only on the Node screen, which says what that puts on
+The node's own card is turned on and named only under Node, Privacy & Location, which says what that puts on
 the air; the app never does either by itself.
 
 Addresses are shared per [draft/sharing.md](https://github.com/ternmesh/spec/blob/main/draft/sharing.md),
