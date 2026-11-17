@@ -88,10 +88,11 @@ From a node of version 10, the Node tab says when the node sends at the most it 
 works out for its board, its antenna and its region, and offers to go back to it once a number has
 been set.
 
-From a node of version 11, the Node tab says how the node pairs: a new passkey on its screen, the
-default 123456 of a node without a screen, or one the user set. While a node pairs with 123456,
-which anyone nearby who knows it can pair with too, the Node tab asks the user once each connection
-to choose their own. Use Default goes back to the node's default.
+From a node of version 11, the Node tab says how the node pairs: a new PIN (the specification's
+passkey) on its screen, the default 123456 of a node without a screen, or one the user set. While a
+node pairs with 123456, which anyone nearby who knows it can pair with too, an alert over whichever
+screen is showing asks the user once each connection to choose their own, and Choose PIN goes to the
+Node tab, which asks for it. Use Default goes back to the node's default.
 
 Cards are per [draft/cards.md](https://github.com/ternmesh/spec/blob/main/draft/cards.md), with a
 node of version 6 or later. Who's About, reached from Contacts, lists the cards the node holds, the

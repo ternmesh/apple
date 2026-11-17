@@ -102,9 +102,9 @@ struct NodeView: View {
     /// What `SELF`'s `pairing` says of how the node pairs.
     static func pairing(_ pairing: UInt8) -> String {
         switch pairing {
-        case NodeSelf.pairingShown: "A new passkey on the node's screen"
+        case NodeSelf.pairingShown: "A new PIN on the node's screen"
         case NodeSelf.pairingDefault: "The default, \(Companion.screenlessPasskey)"
-        case NodeSelf.pairingSet: "Your own passkey"
+        case NodeSelf.pairingSet: "Your own PIN"
         default: "Unknown"
         }
     }
@@ -116,18 +116,18 @@ struct NodeView: View {
     private var choosePasskey: some View {
         let key = Self.passkey(ownPasskey)
         return SwiftUI.Section {
-            Text("This node has no screen, so it pairs with the default passkey, \(Companion.screenlessPasskey). "
+            Text("This node has no screen, so it pairs with the default PIN, \(Companion.screenlessPasskey). "
                 + "Until you choose your own, anyone nearby who knows the default can connect to it, read its "
                 + "messages and change its settings.")
-            TextField("New passkey, 6 digits", text: $ownPasskey)
+            TextField("New PIN, 6 digits", text: $ownPasskey)
             #if os(iOS)
                 .keyboardType(.numberPad)
             #endif
             if key == Companion.screenlessPasskey {
-                Text("Choose a passkey other than the default.").foregroundStyle(.red)
+                Text("Choose a PIN other than the default.").foregroundStyle(.red)
             }
             HStack {
-                Button("Set Passkey") {
+                Button("Set PIN") {
                     if let key { model.setPasskey(key) }
                     ownPasskey = ""
                 }
@@ -140,7 +140,7 @@ struct NodeView: View {
             }
             .buttonStyle(.borderless)
         } header: {
-            Text("Choose a passkey")
+            Text("Choose a PIN")
         } footer: {
             Text("Write it down: you type it the next time a device pairs with this node. You can change it later under Settings.")
         }
@@ -234,14 +234,14 @@ struct NodeView: View {
             }
             // How the node pairs, from a node of version 11 or later: before it, SELF does not say.
             if let pairing = me.pairing {
-                LabeledContent("Passkey", value: Self.pairing(pairing))
+                LabeledContent("PIN", value: Self.pairing(pairing))
             }
-            TextField("Passkey, 6 digits", text: $passkey)
+            TextField("PIN, 6 digits", text: $passkey)
             #if os(iOS)
                 .keyboardType(.numberPad)
             #endif
             HStack {
-                Button("Set Passkey") {
+                Button("Set PIN") {
                     if let key = Self.passkey(passkey) { model.setPasskey(key) }
                     passkey = ""
                 }
@@ -256,8 +256,8 @@ struct NodeView: View {
         } header: {
             Text("Settings")
         } footer: {
-            Text("The node may restart to apply a setting; the app connects again. A new passkey takes effect the next time a device pairs. "
-                + "By default a node with a screen shows a new passkey each time, and one without a screen uses \(Companion.screenlessPasskey).")
+            Text("The node may restart to apply a setting; the app connects again. A new PIN takes effect the next time a device pairs. "
+                + "By default a node with a screen shows a new PIN each time, and one without a screen uses \(Companion.screenlessPasskey).")
         }
         .disabled(!model.isConnected)
     }
