@@ -124,20 +124,18 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertEqual(try Frame.decode([0x43, 0x02], version: 2).body, .synced(news: nil))
         let info3 = Hex.decode("420104147465726e20302e322e302068656c7465632d7633")!
         XCTAssertThrowsError(try Frame.decode(info3))
-        // A node of version 3's INFO, read by a client of the latest version, is read by the version
-        // 3 it says; and one of version 11's, by version 11, without `update`.
-        let node3 = Hex.decode("420103047465726e")!
-        XCTAssertEqual(Frame.version(toRead: node3, speaking: Companion.version), 3)
+        // A node of version 3's INFO, read by a client of the latest version, is the version 3 it says.
         XCTAssertEqual(
-            try Frame.decode(node3, version: Frame.version(toRead: node3, speaking: Companion.version)).body,
+            try Frame.decode(Hex.decode("420103047465726e")!).body,
             .info(version: 3, firmware: "tern", board: nil, release: nil))
         XCTAssertEqual(
             try Frame.decode(info3, version: 3).body,
             .info(version: 4, firmware: "tern 0.2.0 heltec-v3", board: nil, release: nil))
+        // And one of version 11's is read by version 11: without `update`.
         let node11 = try Frame(seq: 1, body: .info(version: 11, firmware: "t", board: "heltec-v3", release: "0.2.0")).encode()
-        XCTAssertThrowsError(try Frame.decode(node11), "cut short, by version 12")
+        XCTAssertEqual(Frame.version(toRead: node11, speaking: Companion.version), 11)
         XCTAssertEqual(
-            try Frame.decode(node11, version: Frame.version(toRead: node11, speaking: Companion.version)).body,
+            try Frame.decode(node11).body,
             .info(version: 11, firmware: "t", board: "heltec-v3", release: "0.2.0", update: nil))
         XCTAssertEqual(Frame.version(toRead: [0x40, 1], speaking: 12), 12, "only an INFO")
     }

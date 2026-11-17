@@ -274,13 +274,14 @@ extension Frame {
         case 0x42:
             let v = try r.u8()
             let firmware = try r.str(limit: Companion.firmwareMax)
-            // Read by the version given: a client reads a node's `INFO` by the lesser of its own
-            // and the one the `INFO` carries (`Frame.version(toRead:speaking:)`), so that a node
-            // of version 3 sends a client of version 4 neither `board` nor `release`.
-            if version >= 4 {
+            // `INFO` is how a client learns the node's version, so it is read by the lesser of the
+            // two (`Frame.version(toRead:speaking:)`): a node of version 3 sends a client of
+            // version 4 neither `board` nor `release`, and one of version 11 sends no `update`.
+            let both = min(v, version)
+            if both >= 4 {
                 let board = try r.str(limit: Companion.boardMax)
                 let release = try r.str(limit: Companion.releaseMax)
-                let update = version >= 12 ? try r.u8() : nil
+                let update = both >= 12 ? try r.u8() : nil
                 body = .info(version: v, firmware: firmware, board: board, release: release, update: update)
             } else {
                 body = .info(version: v, firmware: firmware, board: nil, release: nil)
