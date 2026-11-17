@@ -1,11 +1,13 @@
-// The companion protocol's frames, version 11: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 12: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 10 is this without `SELF`'s `pairing`, version 9 is
+    /// The version this client speaks. Version 11 is this without updates by the bootloader (the
+    /// request `UPDATE_BOOTLOADER` and `INFO`'s `update`), version 10 is version 11 without
+    /// `SELF`'s `pairing`, version 9 is
     /// version 10 without the most (`SET` 3's -128 and `SELF`'s `most`), version 8 is version 9
     /// without turning the node off (the request `OFF`), version 7 is version 8 without the node's own fix (the setting 7 and the
     /// news `FIX`), version 6 is version 7 without join codes (the requests
@@ -16,7 +18,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 11
+    public static let version: UInt8 = 12
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -29,6 +31,7 @@ public enum Companion {
         case 0x26...0x27, 0x47: 7
         case 0x94: 8
         case 0x06: 9
+        case 0x36: 12
         default: 0
         }
     }
@@ -144,7 +147,8 @@ public enum ErrorCode {
     /// Not a valid address, or the node's own.
     public static let badAddress: UInt8 = 4
     /// The node cannot hold another contact, message or group, or the image an update offers. A
-    /// node whose `board` is empty answers `UPDATE_BEGIN` with it.
+    /// node whose `board` is empty answers `UPDATE_BEGIN` and `UPDATE_BOOTLOADER` with it, as does
+    /// one that is updated the other way.
     public static let noRoom: UInt8 = 5
     /// `HELLO` first: on a connection that had one, the node has taken the client for gone.
     public static let helloFirst: UInt8 = 6
@@ -569,7 +573,7 @@ public struct NodeFix: Equatable, Sendable {
     public var has: Bool { source != NodeFix.noSource }
 }
 
-/// What a frame says: every frame of version 11.
+/// What a frame says: every frame of version 12.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -604,6 +608,9 @@ public enum Body: Equatable, Sendable {
     case updateData(offset: UInt32, data: [UInt8])
     /// Run the image. Never sent again once given up on: the node may be restarting into it.
     case updateEnd
+    /// Restart into the bootloader, which takes the image by its own protocol. Never sent again
+    /// once given up on: the node may be restarting into it.
+    case updateBootloader
     /// The client's position: `lat` and `lon` in 10^-7 degree, WGS 84; `altitude` in metres, or
     /// `Position.noAltitude`; `accuracy` in metres, 0 for none; `age` in seconds.
     case setPosition(lat: Int32, lon: Int32, altitude: Int16, accuracy: UInt16, age: UInt16)
@@ -616,9 +623,11 @@ public enum Body: Equatable, Sendable {
     case ok
     case error(code: UInt8)
     /// `board` and `release` are nil from a node, or to a client, of version 3 or earlier, whose
-    /// `INFO` has neither. `board` is empty if the node cannot be updated over this protocol, and
-    /// `release` if its firmware has no version, as a build made by hand may not.
-    case info(version: UInt8, firmware: String, board: String?, release: String?)
+    /// `INFO` has neither. `board` is empty if a client cannot update the node, and `release` if
+    /// its firmware has no version, as a build made by hand may not. `update` is how a client
+    /// updates it, `Body.updateNone`, `updateOverLink` or `updateByBootloader`: nil from a node, or
+    /// to a client, of version 11 or earlier, to which a non-empty `board` means over this link.
+    case info(version: UInt8, firmware: String, board: String?, release: String?, update: UInt8? = nil)
     /// The sync is done. `news` is the node's count as it answers, the `seq` of its next news
     /// frame; nil from a node of version 2 or earlier, whose `SYNCED` has no fields.
     case synced(news: UInt8?)
@@ -688,6 +697,7 @@ public enum Body: Equatable, Sendable {
         case .setPosition: 0x33
         case .share: 0x34
         case .shareGroup: 0x35
+        case .updateBootloader: 0x36
         case .ok: 0x40
         case .error: 0x41
         case .info: 0x42
@@ -748,6 +758,7 @@ public enum Body: Equatable, Sendable {
         case .setPosition: "SET_POSITION"
         case .share: "SHARE"
         case .shareGroup: "SHARE_GROUP"
+        case .updateBootloader: "UPDATE_BOOTLOADER"
         case .ok: "OK"
         case .error: "ERROR"
         case .info: "INFO"
@@ -782,6 +793,13 @@ public enum Body: Equatable, Sendable {
 }
 
 extension Body {
+    /// `INFO`'s `update`: a client cannot update the node.
+    public static let updateNone: UInt8 = 0
+    /// `INFO`'s `update`: over this protocol, `UPDATE_BEGIN` to `UPDATE_END`.
+    public static let updateOverLink: UInt8 = 1
+    /// `INFO`'s `update`: by the node's bootloader, which `UPDATE_BOOTLOADER` restarts it into.
+    public static let updateByBootloader: UInt8 = 2
+
     /// The least version that defines this frame, and for a `SET` its setting: a client sends no
     /// request the node's version does not define, and reads no frame the version both ends speak
     /// does not.

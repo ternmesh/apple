@@ -5,7 +5,8 @@ import PackageDescription
 // connection that speaks it, the records it leaves and how a person reads them, and the firmware
 // updates it carries, with the release manifest and SHA-256 they need. All of that uses
 // nothing past the standard library, so `swift test` runs it on Linux as well as on a Mac. The one
-// part that cannot, the Bluetooth link, is Core Bluetooth's and builds only where that is. The app
+// part that cannot, the Bluetooth links to a node and to its bootloader, is Core Bluetooth's and
+// builds only where that is. The app
 // in App/ depends on it.
 let package = Package(
     name: "TernKit",
@@ -18,7 +19,7 @@ let package = Package(
         .testTarget(
             name: "TernKitTests",
             dependencies: ["TernKit"],
-            resources: [.copy("vectors")]
+            resources: [.copy("vectors"), .copy("fixtures")]
         ),
     ]
 )

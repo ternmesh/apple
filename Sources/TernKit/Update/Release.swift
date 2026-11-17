@@ -3,9 +3,14 @@
 //
 //   https://ternmesh.org/firmware/latest.json
 //   {"release":"0.2.0","images":[{"board":"heltec-v3","region":"EU868",
-//     "file":"tern-heltec-v3-eu868-0.2.0-app.bin","size":1048576,"sha256":"<64 hex>"}]}
+//     "file":"tern-heltec-v3-eu868-0.2.0-app.bin","size":1048576,"sha256":"<64 hex>"},
+//    {"board":"heltec-t114","region":"US915","file":"tern-heltec-t114-us915-0.2.0.zip",
+//     "size":360000,"sha256":"<64 hex>","update":"bootloader"}]}
 //
-// `file` is relative to https://ternmesh.org/firmware/. The manifest is the site's contract, not
+// `file` is relative to https://ternmesh.org/firmware/. `update` says how the image goes to the
+// node: absent, over the companion protocol's link, as an image of the node's own; "bootloader",
+// a DFU package for the node's bootloader. An app from before it never sees a board from a node
+// updated by its bootloader, so it never picks such an image. The manifest is the site's contract, not
 // the specification's: the companion protocol says only that a client finds an image by `INFO`'s
 // `board` and `release`. Reading it needs a little JSON, written here so that TernKit keeps to
 // the standard library.
@@ -54,17 +59,29 @@ public struct FirmwareManifest: Equatable, Sendable {
             guard case let .string(hex)? = entry["sha256"], hex.utf8.count == 64, let digest = Digest(hex: hex) else {
                 throw ReadError.bad(field: "sha256")
             }
-            images.append(FirmwareImage(board: board, region: region, file: file, size: Int(n), sha256: digest))
+            let update: UpdateMethod
+            switch entry["update"] {
+            case nil: update = .link
+            case .string("bootloader")?: update = .bootloader
+            // A way of updating a later app knows: an image for that app, not a broken manifest.
+            case .string?: continue
+            default: throw ReadError.bad(field: "update")
+            }
+            images.append(FirmwareImage(
+                board: board, region: region, file: file, size: Int(n), sha256: digest, update: update))
         }
         self.init(release: release, images: images)
     }
 
-    /// The image for a node of `board` set to `region`, ignoring case; nil if there is none, or
-    /// if either is empty: a node with no board cannot be updated over the companion protocol,
-    /// and one with no region has no image to choose.
-    public func image(board: String, region: String) -> FirmwareImage? {
-        guard !board.isEmpty, !region.isEmpty else { return nil }
-        return images.first { $0.board.lowercased() == board.lowercased() && $0.region.lowercased() == region.lowercased() }
+    /// The image for a node of `board` set to `region`, ignoring case, that goes to it the way
+    /// it is updated; nil if there is none, or if either is empty: a node with no board cannot be
+    /// updated by a client, and one with no region has no image to choose.
+    public func image(board: String, region: String, update: UpdateMethod = .link) -> FirmwareImage? {
+        guard !board.isEmpty, !region.isEmpty, update != .none else { return nil }
+        return images.first {
+            $0.board.lowercased() == board.lowercased() && $0.region.lowercased() == region.lowercased()
+                && $0.update == update
+        }
     }
 
     /// This release against the one a node runs.
@@ -80,14 +97,18 @@ public struct FirmwareImage: Equatable, Sendable {
     /// Its name, relative to `FirmwareManifest.base`.
     public var file: String
     public var size: Int
+    /// The file's SHA-256: for a DFU package, the whole `.zip`'s.
     public var sha256: Digest
+    /// How it goes to the node: an image over the link, or a DFU package by its bootloader.
+    public var update: UpdateMethod
 
-    public init(board: String, region: String, file: String, size: Int, sha256: Digest) {
+    public init(board: String, region: String, file: String, size: Int, sha256: Digest, update: UpdateMethod = .link) {
         self.board = board
         self.region = region
         self.file = file
         self.size = size
         self.sha256 = sha256
+        self.update = update
     }
 
     /// Where to download it.
@@ -102,6 +123,27 @@ public struct FirmwareImage: Equatable, Sendable {
     static func isPlainName(_ file: String) -> Bool {
         !file.isEmpty && !file.hasPrefix(".") && file.unicodeScalars.allSatisfy { c in
             ("a"..."z").contains(c) || ("A"..."Z").contains(c) || ("0"..."9").contains(c) || c == "." || c == "-" || c == "_"
+        }
+    }
+}
+
+/// How a client gives a node new firmware.
+public enum UpdateMethod: Equatable, Sendable {
+    /// It cannot: the node is flashed over USB.
+    case none
+    /// Over the companion protocol: `UPDATE_BEGIN`, `UPDATE_DATA` and `UPDATE_END`.
+    case link
+    /// By the node's bootloader: `UPDATE_BOOTLOADER`, then the bootloader's own protocol.
+    case bootloader
+
+    /// From a node's `INFO`: its `update` from version 12; before, a node with a board is updated
+    /// over the link, since to a client of version 11 or earlier that is what a board means.
+    public init(board: String?, update: UInt8?) {
+        switch update {
+        case Body.updateOverLink?: self = .link
+        case Body.updateByBootloader?: self = .bootloader
+        case .some: self = .none
+        case nil: self = (board ?? "").isEmpty ? .none : .link
         }
     }
 }
