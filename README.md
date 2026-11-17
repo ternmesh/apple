@@ -29,7 +29,7 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 11, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 12, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
@@ -41,12 +41,16 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 | `Sources/TernKit/Connection/Cards.swift` | Who is about as a person reads it: the cards held, most recently heard first, each counted on from when its record came; the name a node's cards may carry; a card's name shown as its sender's claim. |
 | `Sources/TernKit/Connection/Words.swift` | The protocol's numbers in words: states, reasons, refusals, roles, how an update ended. |
 | `Sources/TernKit/Update/Updater.swift` | One firmware image sent to a node: `UPDATE_BEGIN`, on from the offset the node gives, `UPDATE_DATA` a chunk at a time, `UPDATE_END`, and going on after the link drops. Through the connection, with no I/O of its own. |
-| `Sources/TernKit/Update/Release.swift` | The release manifest at `ternmesh.org/firmware/latest.json`, the image in it for a node's board and region, and Semantic Versioning's order, with the little JSON it needs. |
+| `Sources/TernKit/Update/BootloaderUpdater.swift` | A DFU package given to a node by its bootloader: `UPDATE_BOOTLOADER`, the bootloader found by its service, the package, and once more after a bootloader left mid-session. |
+| `Sources/TernKit/Update/DFU.swift` | Nordic's legacy DFU, as an nRF52840 node's bootloader speaks it: the package's init packet and application, and the client, through a transport of three calls (write the control point, write a packet, wait for a notification), so that a bootloader played by hand tests it. |
+| `Sources/TernKit/Update/Zip.swift` | Just enough of a .zip to read a DFU package: stored and deflated entries, checked against their CRC-32, with an inflater of TernKit's own. |
+| `Sources/TernKit/Update/Release.swift` | The release manifest at `ternmesh.org/firmware/latest.json`, the image in it for a node's board, region and way of being updated, and Semantic Versioning's order, with the little JSON it needs. |
 | `Sources/TernKit/Update/SHA256.swift` | SHA-256, for an image's digest: TernKit's own, so that it keeps to the standard library. |
 | `Sources/TernKit/Bluetooth/BluetoothLink.swift` | Core Bluetooth: scanning, connecting, pairing, the MTU, a frame to each write and notification, reconnecting to the remembered node, and restoring in the background. Built only where Core Bluetooth is. |
+| `Sources/TernKit/Bluetooth/BootloaderLink.swift` | Core Bluetooth for a node's bootloader: found by the DFU service, on a central of its own, and the DFU client's transport, each packet written without a response once the link can take it. |
 | `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, the firmware it downloads and sends, and the phone's position given to the node while it shares, from `LocationFeed`), `Notifications` (a tap or a reply on one), and the screens: Connect (the whole window until a node is chosen, then Switch Node), and the Chats, People (contacts, and who is near), Map and Node tabs, the node's dashboard with a screen for each thing about it, with the share sheet. `Design` holds what they share: avatars, signal bars and the node's status pill. The map is MapKit's own view (`PositionMap`), which draws a cell before iOS 17 and macOS 14. |
 | `project.yml` | The Xcode project, for XcodeGen: one target for iOS and macOS. |
-| `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, frames of later versions in `unknown_to_older`, and the updater as the client in `update`. The records file, conversations and `READ`'s rule, routing ids against routing.md's vectors; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
+| `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, frames of later versions in `unknown_to_older`, the updater as the client in `update`, and the bootloader's connections; the DFU client against a bootloader played by hand, and the package against ones `adafruit-nrfutil` made (`fixtures/`). The records file, conversations and `READ`'s rule, routing ids against routing.md's vectors; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
 
 The vectors' `group_ids` are run against the join code reader, which works out the id of the
 group a code is for, so that the app can say whether the node holds it already; `groups.json`'s
@@ -61,6 +65,21 @@ finds an image by `INFO`'s `board` and `release`. The app downloads the image na
 board and region, checks its size and SHA-256 against the manifest, and sends it. A node with no
 board cannot be updated over Bluetooth, and is flashed once over USB at
 [ternmesh.org/flash](https://ternmesh.org/flash).
+
+From a node of version 12, `INFO`'s `update` says how: over the link, as above, or by the node's
+bootloader, as an nRF52840 board's is (the Heltec T114 and the Seeed T1000-E), which has room for one
+image, not two. For such a node the manifest's entry says `"update": "bootloader"`, and its file is
+the release's DFU package, a `.zip` as `adafruit-nrfutil dfu genpkg` makes it; an entry without
+`update` is one over the link, so an app from before version 12, which a node never tells of a board
+it cannot update over the link, never picks one. The app downloads the package and checks its
+SHA-256, asks the node `UPDATE_BOOTLOADER`, and once the node has answered and restarted, looks for
+its bootloader by the legacy DFU service (another device to Bluetooth: on iOS it has another
+identifier than the node's). It gives the bootloader the package as the firmware's
+`tools/ble_dfu.py` does, ten 20-byte packets to each receipt, about 10 ms apart; the erase takes up to
+a minute or two, and the whole about five. The bootloader starts the image, and the node, connected
+again, says its new release. An update that stops part of the way leaves the bootloader waiting
+over Bluetooth, with everything the node held kept, and the app says so: updating again goes straight
+to it. A node whose `update` is 0 says it can be updated only over USB, and the app says so.
 
 `Tests/TernKitTests/vectors/companion.json` is a copy of the specification's
 [`vectors/companion.json`](https://github.com/ternmesh/spec/blob/main/vectors/companion.json).

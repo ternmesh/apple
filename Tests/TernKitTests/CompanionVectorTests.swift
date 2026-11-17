@@ -124,13 +124,68 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertEqual(try Frame.decode([0x43, 0x02], version: 2).body, .synced(news: nil))
         let info3 = Hex.decode("420104147465726e20302e322e302068656c7465632d7633")!
         XCTAssertThrowsError(try Frame.decode(info3))
-        // A node of version 3's INFO, read by a client of the latest version, is the version 3 it says.
+        // A node of version 3's INFO, read by a client of the latest version, is read by the version
+        // 3 it says; and one of version 11's, by version 11, without `update`.
+        let node3 = Hex.decode("420103047465726e")!
+        XCTAssertEqual(Frame.version(toRead: node3, speaking: Companion.version), 3)
         XCTAssertEqual(
-            try Frame.decode(Hex.decode("420103047465726e")!).body,
+            try Frame.decode(node3, version: Frame.version(toRead: node3, speaking: Companion.version)).body,
             .info(version: 3, firmware: "tern", board: nil, release: nil))
         XCTAssertEqual(
             try Frame.decode(info3, version: 3).body,
             .info(version: 4, firmware: "tern 0.2.0 heltec-v3", board: nil, release: nil))
+        let node11 = try Frame(seq: 1, body: .info(version: 11, firmware: "t", board: "heltec-v3", release: "0.2.0")).encode()
+        XCTAssertThrowsError(try Frame.decode(node11), "cut short, by version 12")
+        XCTAssertEqual(
+            try Frame.decode(node11, version: Frame.version(toRead: node11, speaking: Companion.version)).body,
+            .info(version: 11, firmware: "t", board: "heltec-v3", release: "0.2.0", update: nil))
+        XCTAssertEqual(Frame.version(toRead: [0x40, 1], speaking: 12), 12, "only an INFO")
+    }
+
+    /// The bootloader's two connections: each frame reads by its client's version and builds back,
+    /// and the client of version 11 does not know `UPDATE_BOOTLOADER`.
+    func testBootloaderEveryFrameReadsByItsVersion() throws {
+        let connections = v["bootloader"]!.array.map(\.array)
+        XCTAssertEqual(connections.count, 2)
+        for frames in connections {
+            let version = UInt8(try Frame.decode(frames[0]["frame"]!.bytes).body == .hello(version: 12) ? 12 : 11)
+            for f in frames {
+                let bytes = f["frame"]!.bytes
+                let frame = try Frame.decode(bytes, version: Frame.version(toRead: bytes, speaking: version))
+                XCTAssertEqual(frame.body.name, f["type"]!.string)
+                XCTAssertEqual(Hex.encode(try frame.encode()), f["frame"]!.string, "\(version) \(f["type"]!.string)")
+            }
+        }
+        guard case let .info(_, _, board, _, update) = try Frame.decode(connections[0][1]["frame"]!.bytes).body else {
+            return XCTFail()
+        }
+        XCTAssertEqual(board, "heltec-t114")
+        XCTAssertEqual(update, Body.updateByBootloader)
+        XCTAssertEqual(UpdateMethod(board: board, update: update), .bootloader)
+        guard case let .info(_, _, old, _, none) = try Frame.decode(connections[1][1]["frame"]!.bytes, version: 11).body else {
+            return XCTFail()
+        }
+        XCTAssertEqual(old, "", "a client of version 11 is sent no board: to it a board means over the link")
+        XCTAssertNil(none)
+        XCTAssertEqual(UpdateMethod(board: old, update: none), .none)
+    }
+
+    /// Updating by the bootloader is version 12's: a request with no fields.
+    func testUpdateBootloaderIsVersion12s() throws {
+        XCTAssertEqual(Companion.since(type: 0x36), 12)
+        XCTAssertEqual(Body.updateBootloader.since, 12)
+        XCTAssertTrue(Body.updateBootloader.type.isRequestType)
+        XCTAssertEqual(try Frame(seq: 5, body: .updateBootloader).encode(), [0x36, 5])
+        XCTAssertThrowsError(try Frame.decode([0x36, 5], version: 11)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertEqual(Frame.errorCode(for: [0x36, 5], .undefined), ErrorCode.undefined)
+        // How a node is updated, from its INFO: `update` from version 12, and before it, a board.
+        XCTAssertEqual(UpdateMethod(board: "heltec-t114", update: 0), .none)
+        XCTAssertEqual(UpdateMethod(board: "heltec-v3", update: 1), .link)
+        XCTAssertEqual(UpdateMethod(board: "heltec-t114", update: 2), .bootloader)
+        XCTAssertEqual(UpdateMethod(board: "heltec-v3", update: 9), .none, "a way this client does not know")
+        XCTAssertEqual(UpdateMethod(board: "heltec-v3", update: nil), .link)
+        XCTAssertEqual(UpdateMethod(board: "", update: nil), .none)
+        XCTAssertEqual(UpdateMethod(board: nil, update: nil), .none)
     }
 
     /// Speaking `version`, a frame of a type only a later version defines, or a `SET` of a setting
@@ -362,13 +417,16 @@ final class CompanionVectorTests: XCTestCase {
         case "OK": return .ok
         case "ERROR": return .error(code: u8("code"))
         case "INFO":
-            return .info(version: u8("version"), firmware: str("firmware"), board: f["board"]?.string, release: f["release"]?.string)
+            return .info(
+                version: u8("version"), firmware: str("firmware"), board: f["board"]?.string, release: f["release"]?.string,
+                update: f["update"].map { UInt8($0.int) })
         case "SYNCED": return .synced(news: f["news"].map { UInt8($0.int) })
         case "QUEUED": return .queued(id: u32("id"))
         case "MADE": return .made(group: gid("group"))
         case "UPDATE_BEGIN": return .updateBegin(size: u32("size"), digest: Digest(f["digest"]!.bytes)!)
         case "UPDATE_DATA": return .updateData(offset: u32("offset"), data: f["data"]!.bytes)
         case "UPDATE_END": return .updateEnd
+        case "UPDATE_BOOTLOADER": return .updateBootloader
         case "UPDATING": return .updating(offset: u32("offset"))
         case "LINK": return .link(link: str("link"))
         case "SET_POSITION":

@@ -51,9 +51,15 @@ public final class Connection {
     public private(set) var firmware: String?
     /// The hardware the node's firmware is built for, and that firmware's release, from an `INFO`
     /// of version 4 or later: nil before, and empty if the node has none to give. An empty `board`
-    /// is a node that cannot be updated over this protocol.
+    /// is a node that a client cannot update.
     public private(set) var board: String?
     public private(set) var release: String?
+    /// `INFO`'s `update`, from a node of version 12 or later: nil before. `updateMethod` says what
+    /// it, or for an earlier node its board, means.
+    public private(set) var update: UInt8?
+
+    /// How a client gives the node new firmware, from its `INFO`.
+    public var updateMethod: UpdateMethod { UpdateMethod(board: board, update: update) }
 
     /// Sends one frame to the node: one Bluetooth write, or wrapped for a byte stream.
     public var send: ([UInt8]) -> Void = { _ in }
@@ -120,6 +126,7 @@ public final class Connection {
         firmware = nil
         board = nil
         release = nil
+        update = nil
         hello()
         for p in old { p.then(.failure(.closed)) }
     }
@@ -174,7 +181,7 @@ public final class Connection {
         var frame: Frame?
         var malformed = false
         do {
-            frame = try Frame.decode(bytes, version: agreed ?? version)
+            frame = try Frame.decode(bytes, version: Frame.version(toRead: bytes, speaking: agreed ?? version))
         } catch DecodeError.malformed {
             malformed = true
         } catch {}
@@ -238,11 +245,12 @@ public final class Connection {
         inFlight = nil
         lastAnswer = now()
         switch (p.kind, body) {
-        case let (.hello, .info(v, fw, b, rel)):
+        case let (.hello, .info(v, fw, b, rel, how)):
             nodeVersion = v
             firmware = fw
             board = b
             release = rel
+            update = how
             phase = .open
             expectedNews = 0
             // A connection that starts has missed whatever changed while there was none.

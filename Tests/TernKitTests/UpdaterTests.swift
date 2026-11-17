@@ -68,7 +68,8 @@ final class UpdaterTests: XCTestCase {
             XCTAssertEqual(Hex.encode(try frame.encode()), f["frame"]!.string)
             if case let .error(code) = frame.body { codes.append(code) }
         }
-        XCTAssertEqual(codes, [10, 10, 3, 10, 3, 3, 10, 11, 10])
+        // The last: `UPDATE_BOOTLOADER`, to a node updated over the link, not by its bootloader.
+        XCTAssertEqual(codes, [10, 10, 3, 10, 3, 3, 10, 11, 10, 5])
     }
 
     // MARK: Against a node played by hand
@@ -289,6 +290,177 @@ final class UpdaterTests: XCTestCase {
         XCTAssertEqual(new.take(), .updateBegin(size: 400, digest: updater.digest))
     }
 
+    // MARK: By the bootloader
+
+    func package() -> DFUPackage { DFUPackage(initPacket: [1, 2, 3], image: [UInt8](repeating: 0x5A, count: 250)) }
+
+    /// Asked, the node answers `OK` and restarts; the bootloader is found by its service and given
+    /// the package; it starts the image.
+    func testByTheBootloader() async throws {
+        let node = UpdateNode()
+        let finder = FakeFinder()
+        let updater = BootloaderUpdater(package: package())
+        var phases: [BootloaderUpdater.Phase] = []
+        updater.onChange = { if phases.last != updater.phase { phases.append(updater.phase) } }
+        node.onSubmit = { node.answer(.success(.ok)) }
+        let outcome = await updater.run(asking: node, finder: finder)
+
+        XCTAssertEqual(outcome, .activated)
+        XCTAssertEqual(node.asked, [.updateBootloader])
+        XCTAssertEqual(finder.looked, [DFU.findWait])
+        XCTAssertEqual(finder.released, 1)
+        let boot = try XCTUnwrap(finder.bootloaders.first)
+        XCTAssertEqual(boot.image, package().image)
+        XCTAssertTrue(boot.activated)
+        XCTAssertFalse(updater.inBootloader, "the image is activated: the node comes back as itself")
+        XCTAssertEqual(Array(phases.prefix(4)), [.asking, .looking, .transferring(.erasing), .transferring(.initializing)])
+        XCTAssertEqual(phases.last, .finished(.activated))
+        XCTAssertTrue(phases.contains(.transferring(.sending(sent: 250, size: 250))))
+        XCTAssertEqual(Words.bootloader(.transferring(.sending(sent: 125, size: 250))), "Sending: 50%")
+    }
+
+    /// The node over the vectors' first bootloader connection: refused an update over the link,
+    /// and answered `UPDATE_BOOTLOADER`; the updater asks it through the connection, byte for byte.
+    @MainActor
+    func testTheVectorsBootloaderConnection() async throws {
+        let frames = v["bootloader"]!.array[0].array
+        let wire = Wire()
+        let c = Connection(now: { 0 }, wallTime: { 1_790_000_000 })
+        c.send = { wire.out.append($0) }
+        c.open()
+        XCTAssertEqual(Hex.encode(wire.out.removeFirst()), frames[0]["frame"]!.string)
+        c.receive(frames[1]["frame"]!.bytes)
+        answer(c, wire, .ok)
+        answer(c, wire, .synced(news: 0))
+        XCTAssertEqual(c.updateMethod, .bootloader)
+        // Over the link first, as an app of version 11 would: refused, as the vector has it.
+        var begun: Result<Body, RequestFailure>?
+        c.submit(try Frame.decode(frames[2]["frame"]!.bytes).body) { begun = $0 }
+        XCTAssertEqual(Hex.encode(wire.out.removeFirst()), frames[2]["frame"]!.string)
+        c.receive(frames[3]["frame"]!.bytes)
+        XCTAssertEqual(begun, .failure(.refused(code: ErrorCode.noRoom)))
+
+        let finder = FakeFinder()
+        let updater = BootloaderUpdater(package: package())
+        let task = Task { await updater.run(asking: c, finder: finder) }
+        while wire.out.isEmpty { await Task.yield() }
+        XCTAssertEqual(Hex.encode(wire.out.removeFirst()), frames[4]["frame"]!.string)
+        c.receive(frames[5]["frame"]!.bytes)
+        let outcome = await task.value
+        XCTAssertEqual(outcome, .activated)
+    }
+
+    /// Refused, the node is not restarting: nothing is looked for.
+    func testRefusedByANodeNotUpdatedThatWay() async throws {
+        let node = UpdateNode()
+        node.onSubmit = { node.answer(.failure(.refused(code: ErrorCode.noRoom))) }
+        let finder = FakeFinder()
+        let updater = BootloaderUpdater(package: package())
+        let refused = await updater.run(asking: node, finder: finder)
+        XCTAssertEqual(refused, .refused(code: ErrorCode.noRoom))
+        XCTAssertEqual(finder.looked, [])
+        XCTAssertFalse(updater.inBootloader)
+        XCTAssertTrue(Words.bootloader(.refused(code: ErrorCode.noRoom)).contains("ternmesh.org/flash"))
+
+        let older = UpdateNode()
+        older.onSubmit = { older.answer(.failure(.unsupported)) }
+        let unsupported = await BootloaderUpdater(package: package()).run(asking: older, finder: finder)
+        XCTAssertEqual(unsupported, .unsupported)
+    }
+
+    /// Unanswered, `UPDATE_BOOTLOADER` is not sent again: the node may be restarting, and the
+    /// bootloader is looked for.
+    func testUnansweredItLooksForTheBootloader() async throws {
+        for failure in [RequestFailure.noAnswer, .closed] {
+            let node = UpdateNode()
+            node.onSubmit = { node.answer(.failure(failure)) }
+            let finder = FakeFinder()
+            let updater = BootloaderUpdater(package: package())
+            let ended = await updater.run(asking: node, finder: finder)
+            XCTAssertEqual(ended, .activated)
+            XCTAssertEqual(node.asked, [.updateBootloader])
+            XCTAssertEqual(finder.looked.count, 1)
+        }
+    }
+
+    /// No bootloader found; and one that fails part of the way, which leaves it waiting, so that
+    /// an update started again without the node goes straight to it.
+    func testNotFoundAndFailedAndAgain() async throws {
+        let node = UpdateNode()
+        node.onSubmit = { node.answer(.success(.ok)) }
+        let none = FakeFinder()
+        none.found = false
+        let lost = BootloaderUpdater(package: package())
+        let notFound = await lost.run(asking: node, finder: none)
+        XCTAssertEqual(notFound, .notFound)
+        XCTAssertTrue(lost.inBootloader)
+        XCTAssertTrue(Words.bootloader(.notFound).contains("not found"))
+
+        let failing = FakeFinder()
+        failing.configure = { $0.dropReceipts = true }
+        let updater = BootloaderUpdater(package: package())
+        let outcome = await updater.run(asking: UpdateNode.answering(.success(.ok)), finder: failing)
+        XCTAssertEqual(outcome, .failed(.noAnswer(step: 0x11)))
+        XCTAssertTrue(updater.inBootloader)
+        XCTAssertEqual(failing.released, 1, "the bootloader let go of, to be found again")
+        XCTAssertTrue(Words.bootloader(outcome).contains("waiting in its bootloader"))
+
+        let again = BootloaderUpdater(package: package())
+        let finder = FakeFinder()
+        let resumed = await again.run(asking: nil, finder: finder)
+        XCTAssertEqual(resumed, .activated, "without the node, which is not there")
+        XCTAssertEqual(finder.looked.count, 1)
+    }
+
+    /// A bootloader left mid-session is told to restart, and is found and started again; once.
+    func testABootloaderMidSessionIsStartedAgainOnce() async throws {
+        let finder = FakeFinder()
+        var first = true
+        finder.configure = { boot in
+            if first { boot.refuse = [1: DFU.invalidState] }
+            first = false
+        }
+        let restarted = await BootloaderUpdater(package: package()).run(asking: nil, finder: finder)
+        XCTAssertEqual(restarted, .activated)
+        XCTAssertEqual(finder.looked.count, 2)
+        XCTAssertEqual(finder.bootloaders[0].controls, [[1, 4], [6]])
+
+        let stuck = FakeFinder()
+        stuck.configure = { $0.refuse = [1: DFU.invalidState] }
+        let stuckOutcome = await BootloaderUpdater(package: package()).run(asking: nil, finder: stuck)
+        XCTAssertEqual(stuckOutcome, .failed(.wasMidSession))
+        XCTAssertEqual(stuck.looked.count, 2)
+    }
+
+    /// The manifest's image for each way a node is updated: the link's for a board alone, or
+    /// `update` 1; the bootloader's DFU package for `update` 2; none for 0.
+    func testTheImageForTheWayTheNodeIsUpdated() throws {
+        let digest = String(repeating: "ab", count: 32)
+        let json = #"""
+            {"release":"0.6.0","images":[
+             {"board":"heltec-v3","region":"US915","file":"tern-heltec-v3-us915-0.6.0-app.bin","size":10,"sha256":"\#(digest)"},
+             {"board":"heltec-t114","region":"US915","file":"tern-heltec-t114-us915-0.6.0.uf2","size":11,"sha256":"\#(digest)","update":"usb"},
+             {"board":"heltec-t114","region":"US915","file":"tern-heltec-t114-us915-0.6.0.zip","size":12,"sha256":"\#(digest)","update":"bootloader"}
+            ]}
+            """#
+        let m = try FirmwareManifest(json: Array(json.utf8))
+        XCTAssertEqual(m.images.count, 2, "an image for a way this app does not know is left out")
+        for (board, update) in [("heltec-v3", UInt8?.none), ("heltec-v3", 1), ("heltec-t114", 2), ("heltec-t114", 0)] {
+            let how = UpdateMethod(board: board, update: update)
+            let image = m.image(board: board, region: "us915", update: how)
+            switch update {
+            case nil, 1?: XCTAssertEqual(image?.size, 10)
+            case 2?: XCTAssertEqual(image?.file, "tern-heltec-t114-us915-0.6.0.zip")
+            default: XCTAssertNil(image)
+            }
+        }
+        XCTAssertNil(m.image(board: "heltec-t114", region: "US915"), "an old app's choice: the link's, and there is none")
+        XCTAssertNil(m.image(board: "heltec-v3", region: "US915", update: .bootloader))
+        XCTAssertEqual(
+            try? FirmwareManifest(json: Array(#"{"release":"1.0.0","images":[{"board":"b","region":"r","file":"f","size":1,"sha256":"\#(digest)","update":2}]}"#.utf8)),
+            nil, "an update that is not a word")
+    }
+
     // MARK: -
 
     /// Plays the node's half of `frames` to `connection`, checking the client sends its half.
@@ -320,11 +492,21 @@ private final class Wire {
 private final class UpdateNode: UpdateLink {
     var asked: [Body] = []
     var pending: ((Result<Body, RequestFailure>) -> Void)?
+    /// Called once each request is out: a test that awaits answers here.
+    var onSubmit: () -> Void = {}
 
     func submit(_ body: Body, then: @escaping (Result<Body, RequestFailure>) -> Void) {
         XCTAssertNil(pending, "two requests at once")
         asked.append(body)
         pending = then
+        onSubmit()
+    }
+
+    /// A node that answers every request with `result`.
+    static func answering(_ result: Result<Body, RequestFailure>) -> UpdateNode {
+        let node = UpdateNode()
+        node.onSubmit = { [unowned node] in node.answer(result) }
+        return node
     }
 
     /// The request out.
@@ -342,4 +524,24 @@ private final class UpdateNode: UpdateLink {
         pending = nil
         then?(result)
     }
+}
+
+/// Finds a bootloader played by hand, made afresh each time it is looked for.
+private final class FakeFinder: BootloaderFinder {
+    var found = true
+    var configure: (FakeBootloader) -> Void = { _ in }
+    private(set) var looked: [Double] = []
+    private(set) var bootloaders: [FakeBootloader] = []
+    private(set) var released = 0
+
+    func find(within seconds: Double) async -> DFUTransport? {
+        looked.append(seconds)
+        guard found else { return nil }
+        let boot = FakeBootloader()
+        configure(boot)
+        bootloaders.append(boot)
+        return boot
+    }
+
+    func disconnect() { released += 1 }
 }

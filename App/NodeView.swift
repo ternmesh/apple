@@ -97,7 +97,11 @@ struct NodeView: View {
                 Button("Update") { model.update() }
                 Button("Not Now", role: .cancel) {}
             } message: {
-                Text("It takes a few minutes. Keep the node near this device. If the link drops, the update goes on when the node is back. At the end the node restarts, and keeps its contacts, messages and settings.")
+                if confirmingUpdate?.image.update == .bootloader {
+                    Text("The node restarts into its bootloader, which takes the new firmware over Bluetooth. \(Words.bootloaderUpdateTakes) The node keeps its contacts, messages and settings.")
+                } else {
+                    Text("It takes a few minutes. Keep the node near this device. If the link drops, the update goes on when the node is back. At the end the node restarts, and keeps its contacts, messages and settings.")
+                }
             }
         }
     }
@@ -714,6 +718,10 @@ struct NodeView: View {
                         Text("This node can't be updated over Bluetooth. Flash it once over USB, and the app can update it from then on.")
                             .foregroundStyle(.secondary)
                         flashLink
+                    } else if model.updateMethod == UpdateMethod.none {
+                        // A board whose firmware, or bootloader, takes no image over Bluetooth.
+                        Text(Words.updateOverUSB).foregroundStyle(.secondary)
+                        flashLink
                     } else {
                         updateStatus
                     }
@@ -777,6 +785,26 @@ struct NodeView: View {
                 Button("Cancel", role: .destructive) { model.cancelUpdate() }
                     .buttonStyle(.borderless)
             }
+        case let .bootloader(offer, phase):
+            if case let .transferring(.sending(sent, size)) = phase {
+                ProgressView(value: Double(sent), total: Double(max(size, 1))) {
+                    Text("Sending \(offer.release) to the bootloader")
+                } currentValueLabel: {
+                    Text("\(sent * 100 / max(size, 1))%, \(kilobytes(sent)) of \(kilobytes(size))")
+                }
+                Button("Stop", role: .destructive) { model.cancelUpdate() }
+                    .buttonStyle(.borderless)
+            } else {
+                HStack {
+                    ProgressView()
+                    Text(Words.bootloader(phase)).foregroundStyle(.secondary)
+                }
+            }
+            Text(Words.bootloaderUpdateTakes).font(.footnote).foregroundStyle(.secondary)
+        case let .inBootloader(offer, why):
+            Text(why).foregroundStyle(.secondary)
+            // Not waiting for the node: it is in its bootloader, not connected as itself.
+            Button("Update to \(offer.release) Again") { model.updateAgainInBootloader() }
         case let .restarting(offer, confirmed):
             HStack {
                 ProgressView()

@@ -68,8 +68,14 @@ enum FirmwareStatus: Equatable {
     /// Sending it to the node: `held` of `size` bytes, as the node has said. `waiting` while the
     /// link is down; it goes on when it is back.
     case sending(FirmwareOffer, held: Int, size: Int, waiting: Bool, canCancel: Bool)
+    /// Given to the node's bootloader: where that is, from asking the node to restart into it to
+    /// the bootloader starting the image.
+    case bootloader(FirmwareOffer, BootloaderUpdater.Phase)
+    /// An update by the bootloader stopped after the node restarted into it, and why: the
+    /// bootloader waits for an image over Bluetooth, and updating again goes straight to it.
+    case inBootloader(FirmwareOffer, String)
     /// Sent, and waiting for the node to come back and say what it runs. `confirmed` if it
-    /// answered `UPDATE_END`, false if that answer never came.
+    /// answered `UPDATE_END`, or its bootloader took the image; false if that answer never came.
     case restarting(FirmwareOffer, confirmed: Bool)
     /// How it ended, in words.
     case done(String)
@@ -78,7 +84,7 @@ enum FirmwareStatus: Equatable {
     /// Downloading the image or sending it.
     var isTransferring: Bool {
         switch self {
-        case .downloading, .sending: return true
+        case .downloading, .sending, .bootloader: return true
         default: return false
         }
     }
@@ -131,6 +137,9 @@ final class NodeModel: ObservableObject {
     /// board is a node that cannot be updated over Bluetooth.
     @Published private(set) var board: String?
     @Published private(set) var release: String?
+    /// How the node is updated, from its `INFO`: over the link, by its bootloader, or, with a
+    /// board, over USB only.
+    @Published private(set) var updateMethod: UpdateMethod?
     @Published private(set) var firmwareStatus = FirmwareStatus.idle
     /// The release the node ran when it was last checked for an update: what the offer was weighed against.
     private var checkedAgainst: String?
@@ -201,6 +210,12 @@ final class NodeModel: ObservableObject {
     private var updateNode: UUID?
     private var downloaded: (image: FirmwareImage, bytes: [UInt8])?
     private var firmwareTask: Task<Void, Never>?
+    /// An update by the bootloader under way, and the package it gives: kept after one that stops
+    /// part of the way, for updating again, which finds the bootloader waiting.
+    private var bootloaderUpdater: BootloaderUpdater?
+    private var bootloaderPackage: (offer: FirmwareOffer, package: DFUPackage)?
+    /// The bootloader's link: made when first needed, as it asks for Bluetooth itself.
+    private lazy var bootloaderLink = BootloaderLink()
     private let location = LocationFeed()
     /// The node has synced over the link that is up: the sharing the records hold is the node's
     /// now, not what it was before the link dropped. The link is ready a moment before its sync's
@@ -814,6 +829,11 @@ final class NodeModel: ObservableObject {
     func checkForUpdate() {
         // Not until the first sync is done: the region held is not yet the node's.
         guard linkState == .ready, let board, !board.isEmpty else { return }
+        let method = updateMethod ?? .none
+        guard method != .none else {
+            firmwareStatus = .nothing(Words.updateOverUSB)
+            return
+        }
         guard let region = records.me?.region, !region.isEmpty else {
             firmwareStatus = .nothing("Set the node's region first: each region has its own image.")
             return
@@ -826,7 +846,7 @@ final class NodeModel: ObservableObject {
             let status: FirmwareStatus
             do {
                 let manifest = try FirmwareManifest(json: try await Self.fetch(FirmwareManifest.latest, fresh: true))
-                if let image = manifest.image(board: board, region: region) {
+                if let image = manifest.image(board: board, region: region, update: method) {
                     status = .found(FirmwareOffer(
                         release: manifest.release, image: image, comparison: manifest.compared(to: running)))
                 } else {
@@ -849,7 +869,7 @@ final class NodeModel: ObservableObject {
         guard linkState == .ready, case let .found(offer) = firmwareStatus, let id = remembered else { return }
         guard stillFor(offer) else { return }
         updateNode = id
-        if let d = downloaded, d.image == offer.image { return send(d.bytes, offer) }
+        if let d = downloaded, d.image == offer.image { return give(d.bytes, offer) }
         firmwareStatus = .downloading(offer)
         firmwareTask?.cancel()
         firmwareTask = Task { [weak self] in
@@ -865,7 +885,7 @@ final class NodeModel: ObservableObject {
                     return
                 }
                 self.downloaded = (image, bytes)
-                self.send(bytes, offer)
+                self.give(bytes, offer)
                 return
             } catch is CancellationError {
                 return
@@ -887,9 +907,19 @@ final class NodeModel: ObservableObject {
             firmwareStatus = .found(offer)
         case .sending:
             updater?.cancel()
+        case .bootloader(_, .transferring):
+            // The bootloader stops where it is, and waits for an image.
+            firmwareTask?.cancel()
         default:
             break
         }
+    }
+
+    /// Updates again after an update by the bootloader stopped part of the way: the bootloader is
+    /// waiting, unless the node is back as itself, which is asked again.
+    func updateAgainInBootloader() {
+        guard case .inBootloader = firmwareStatus, let held = bootloaderPackage else { return }
+        runBootloader(held.package, held.offer, asking: isReady)
     }
 
     /// Whether the node is still what the offer was chosen for, asked again before downloading and
@@ -904,6 +934,64 @@ final class NodeModel: ObservableObject {
             return false
         }
         return true
+    }
+
+    /// Gives the node what was downloaded, the way the image goes: over the link, or as a DFU
+    /// package to its bootloader.
+    private func give(_ bytes: [UInt8], _ offer: FirmwareOffer) {
+        guard offer.image.update == .bootloader else { return send(bytes, offer) }
+        guard stillFor(offer) else { return }
+        guard let package = try? DFUPackage(zip: bytes) else {
+            downloaded = nil
+            firmwareStatus = .failed("The firmware downloaded is not a package the node's bootloader takes.")
+            return
+        }
+        runBootloader(package, offer, asking: true)
+    }
+
+    /// Asks the node to restart into its bootloader, unless `asking` is false, as when it is there
+    /// already, and gives the bootloader the package. The node's link drops as it restarts, and
+    /// connects again by itself once the image runs; its `INFO` then says the release.
+    private func runBootloader(_ package: DFUPackage, _ offer: FirmwareOffer, asking: Bool) {
+        let node: UpdateLink? = asking ? link.connection : nil
+        if asking, node == nil || !isReady {
+            firmwareStatus = .failed("The node is not connected. Connect to it, and update again.")
+            return
+        }
+        let u = BootloaderUpdater(package: package)
+        bootloaderUpdater = u
+        bootloaderPackage = (offer, package)
+        updateNode = remembered
+        u.onChange = { [weak self, weak u] in
+            guard let self, let u, self.bootloaderUpdater === u else { return }
+            if case .finished = u.phase { return }
+            self.firmwareStatus = .bootloader(offer, u.phase)
+        }
+        firmwareStatus = .bootloader(offer, .idle)
+        // Awake throughout: a phone that locks part of the way slows the transfer to a crawl.
+        keepAwake(true)
+        firmwareTask?.cancel()
+        firmwareTask = Task { [weak self] in
+            guard let self else { return }
+            let outcome = await u.run(asking: node, finder: self.bootloaderLink)
+            guard self.bootloaderUpdater === u else { return }
+            self.bootloaderUpdater = nil
+            self.keepAwake(false)
+            switch outcome {
+            case .activated:
+                self.bootloaderPackage = nil
+                self.firmwareStatus = .restarting(offer, confirmed: true)
+            case .notFound, .failed, .cancelled:
+                if u.inBootloader {
+                    self.firmwareStatus = .inBootloader(offer, Words.bootloader(outcome))
+                } else {
+                    self.firmwareStatus = .failed(Words.bootloader(outcome))
+                }
+            case .refused, .unsupported, .confused:
+                self.bootloaderPackage = nil
+                self.firmwareStatus = .failed(Words.bootloader(outcome))
+            }
+        }
     }
 
     private func send(_ bytes: [UInt8], _ offer: FirmwareOffer) {
@@ -981,10 +1069,13 @@ final class NodeModel: ObservableObject {
         firmwareTask = nil
         updater?.cancel()
         updater = nil
+        bootloaderUpdater = nil
+        bootloaderPackage = nil
         updateNode = nil
         downloaded = nil
         board = nil
         release = nil
+        updateMethod = nil
         firmwareStatus = .idle
         keepAwake(false)
     }
@@ -1021,6 +1112,7 @@ final class NodeModel: ObservableObject {
             agreed = link.connection?.agreed
             board = link.connection?.board
             release = link.connection?.release
+            updateMethod = link.connection?.updateMethod
             nodeReturned()
         case let .news(body):
             if case let .asked(address, why) = body {

@@ -31,7 +31,7 @@ extension Frame {
             w.u8(version)
         case let .sync(after):
             w.u32(after)
-        case .ping, .off, .ok, .updateEnd:
+        case .ping, .off, .ok, .updateEnd, .updateBootloader:
             break
         case let .synced(news):
             if let news { w.u8(news) }
@@ -107,14 +107,15 @@ extension Frame {
             w.position(p)
         case let .error(code):
             w.u8(code)
-        case let .info(version, firmware, board, release):
+        case let .info(version, firmware, board, release, update):
             w.u8(version)
             try w.str(firmware, limit: Companion.firmwareMax, field: "firmware")
-            // Version 4's fields, both or neither.
-            if board != nil || release != nil {
+            // Version 4's fields, both or neither; then version 12's after them.
+            if board != nil || release != nil || update != nil {
                 try w.str(board ?? "", limit: Companion.boardMax, field: "board")
                 try w.str(release ?? "", limit: Companion.releaseMax, field: "release")
             }
+            if let update { w.u8(update) }
         case let .queued(id):
             w.u32(id)
         case let .nodeSelf(s):
@@ -208,6 +209,13 @@ extension Frame {
         return w.bytes
     }
 
+    /// The version a client reads `bytes` from a node by, speaking `version`: that one, but for
+    /// an `INFO`, which is how a client learns the node's version, and so is read by the lesser of
+    /// the two.
+    public static func version(toRead bytes: [UInt8], speaking version: UInt8) -> UInt8 {
+        bytes.count > 2 && bytes[0] == 0x42 ? min(version, bytes[2]) : version
+    }
+
     /// Reads a frame by `version`, the one both ends speak. Bytes after the fields that version
     /// defines are ignored, as the specification requires: that is how a later version adds a
     /// field.
@@ -255,6 +263,7 @@ extension Frame {
         case 0x30: body = .updateBegin(size: try r.u32(), digest: try r.digest())
         case 0x31: body = .updateData(offset: try r.u32(), data: try r.blob(limit: Companion.updateChunk))
         case 0x32: body = .updateEnd
+        case 0x36: body = .updateBootloader
         case 0x33:
             body = .setPosition(
                 lat: try r.i32(), lon: try r.i32(), altitude: try r.i16(), accuracy: try r.u16(), age: try r.u16())
@@ -265,12 +274,14 @@ extension Frame {
         case 0x42:
             let v = try r.u8()
             let firmware = try r.str(limit: Companion.firmwareMax)
-            // `INFO` is how a client learns the node's version, so it is read by the lesser of the
-            // two: a node of version 3 sends a client of version 4 neither `board` nor `release`.
-            if min(v, version) >= 4 {
-                body = .info(
-                    version: v, firmware: firmware, board: try r.str(limit: Companion.boardMax),
-                    release: try r.str(limit: Companion.releaseMax))
+            // Read by the version given: a client reads a node's `INFO` by the lesser of its own
+            // and the one the `INFO` carries (`Frame.version(toRead:speaking:)`), so that a node
+            // of version 3 sends a client of version 4 neither `board` nor `release`.
+            if version >= 4 {
+                let board = try r.str(limit: Companion.boardMax)
+                let release = try r.str(limit: Companion.releaseMax)
+                let update = version >= 12 ? try r.u8() : nil
+                body = .info(version: v, firmware: firmware, board: board, release: release, update: update)
             } else {
                 body = .info(version: v, firmware: firmware, board: nil, release: nil)
             }

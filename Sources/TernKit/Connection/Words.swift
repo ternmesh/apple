@@ -78,6 +78,57 @@ public enum Words {
         }
     }
 
+    /// A node a client cannot update: flashed over USB, from the site's flash page.
+    public static let updateOverUSB =
+        "This node can't be updated over Bluetooth. Update it over USB at ternmesh.org/flash."
+
+    /// How long an update by the bootloader takes, said before it starts.
+    public static let bootloaderUpdateTakes =
+        "This takes about 5 minutes. Keep your phone near the node, with the app open, until it is done."
+
+    /// Where an update by the bootloader is.
+    public static func bootloader(_ phase: BootloaderUpdater.Phase) -> String {
+        switch phase {
+        case .idle: "Starting…"
+        case .asking: "Asking the node to restart into its bootloader…"
+        case .looking: "Looking for the node's bootloader…"
+        case .transferring(.erasing): "Erasing the old firmware. This takes up to a minute or two…"
+        case .transferring(.initializing): "Starting the transfer…"
+        case let .transferring(.sending(sent, size)): "Sending: \(sent * 100 / max(size, 1))%"
+        case .transferring(.validating): "Checking the firmware…"
+        case .transferring(.activating): "Starting the new firmware…"
+        case let .finished(outcome): bootloader(outcome)
+        }
+    }
+
+    /// How an update by the bootloader ended. After any failure past the node's restart, the node
+    /// is in its bootloader, which waits for an image: saying so is what tells the user a retry
+    /// will work, and that nothing the node held is lost.
+    public static func bootloader(_ outcome: BootloaderOutcome) -> String {
+        let waiting = "The node is waiting in its bootloader, and keeps everything it held: update again to finish."
+        switch outcome {
+        case .activated: return "The bootloader has the new firmware, and is starting it."
+        case .refused(ErrorCode.noRoom), .unsupported: return updateOverUSB
+        case let .refused(code): return error(code)
+        case .confused: return "The node answered something the update did not expect."
+        case .notFound:
+            return "The node's bootloader was not found. Keep your phone near the node and update again; "
+                + "if the node is running as before, it did not restart."
+        case .failed(.refused(_, DFU.operationFailed)):
+            return "The bootloader stopped part of the way. " + waiting
+        case .failed(.refused(_, DFU.crcError)):
+            return "The firmware did not arrive intact. " + waiting
+        case .failed(.noAnswer):
+            return "The bootloader stopped answering. " + waiting
+        case .failed(.wasMidSession):
+            return "The bootloader was busy with an earlier transfer, and has restarted. " + waiting
+        case .failed:
+            return "The update was cut off. " + waiting
+        case .cancelled:
+            return "Update stopped. " + waiting
+        }
+    }
+
     /// A request that came to nothing.
     public static func failure(_ failure: RequestFailure) -> String {
         switch failure {

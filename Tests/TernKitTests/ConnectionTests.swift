@@ -174,6 +174,74 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(link.events.filter { $0 == .synced }.count, 1)
     }
 
+    /// A client of version 11 is sent an `INFO` without `update`, and does not send
+    /// `UPDATE_BOOTLOADER`, which is version 12's; the node refuses it from one that does.
+    func testOlderVersion11() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 11 }!
+        let frames = older["frames"]!.array
+        let link = Link(Connection(version: 11, now: { 0 }, wallTime: nil))
+        _ = link.replay(Array(frames.dropLast(2)))
+        XCTAssertEqual(link.connection.agreed, 11)
+        XCTAssertEqual(link.connection.board, "heltec-v3")
+        XCTAssertNil(link.connection.update)
+        XCTAssertEqual(link.connection.updateMethod, .link, "to a client of version 11, a board means over the link")
+        XCTAssertEqual(try Frame.decode(frames[frames.count - 2]["frame"]!.bytes).body, .updateBootloader)
+        XCTAssertEqual(
+            try Frame.decode(frames[frames.count - 1]["frame"]!.bytes, version: 11).body,
+            .error(code: ErrorCode.undefined))
+
+        var result: Result<Body, RequestFailure>?
+        link.connection.submit(.updateBootloader) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(link.out, [])
+        XCTAssertEqual(link.connection.records.syncedVersion, 11)
+        XCTAssertEqual(link.connection.records.me?.pairing, NodeSelf.pairingDefault)
+    }
+
+    /// The bootloader's connections, from the client's side: one of version 12 learns the node is
+    /// updated by its bootloader, is refused an update over the link, and is answered
+    /// `UPDATE_BOOTLOADER`; one of version 11 learns of no board, and so of no update at all.
+    func testBootloaderConnections() throws {
+        let connections = v["bootloader"]!.array.map(\.array)
+        let first = Link(Connection(now: { 0 }, wallTime: { 1_790_000_000 }))
+        let answers = first.replay(connections[0], syncedByHand: true)
+        XCTAssertEqual(answers, [.failure(.refused(code: ErrorCode.noRoom)), .success(.ok)])
+        XCTAssertEqual(first.connection.board, "heltec-t114")
+        XCTAssertEqual(first.connection.release, "0.2.0")
+        XCTAssertEqual(first.connection.update, Body.updateByBootloader)
+        XCTAssertEqual(first.connection.updateMethod, .bootloader)
+
+        let second = Link(Connection(version: 11, now: { 0 }, wallTime: { 1_790_000_000 }))
+        XCTAssertEqual(second.replay(connections[1], syncedByHand: true), [.failure(.refused(code: ErrorCode.noRoom))])
+        XCTAssertEqual(second.connection.board, "")
+        XCTAssertNil(second.connection.update)
+        XCTAssertEqual(second.connection.updateMethod, .none)
+    }
+
+    /// A client of the latest version talking to a node of version 11 reads its `INFO`, which has
+    /// no `update`, by version 11, and takes a board to mean an update over the link.
+    func testANodeOfVersion11() throws {
+        let node = Node()
+        node.version = 11
+        node.connection.open()
+        node.answerAll()
+        XCTAssertEqual(node.connection.agreed, 11)
+        XCTAssertEqual(node.connection.board, "heltec-v3")
+        XCTAssertNil(node.connection.update)
+        XCTAssertEqual(node.connection.updateMethod, .link)
+        var result: Result<Body, RequestFailure>?
+        node.connection.submit(.updateBootloader) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(node.sent, [])
+
+        let latest = Node()
+        latest.update = Body.updateByBootloader
+        latest.board = "seeed-t1000-e"
+        latest.connection.open()
+        latest.answerAll()
+        XCTAssertEqual(latest.connection.updateMethod, .bootloader)
+    }
+
     /// A client of version 8 does not send `OFF`, which is version 9's; the node refuses it from
     /// one that does.
     func testOlderVersion8() throws {
@@ -898,7 +966,11 @@ private final class Link {
     /// Plays the node's half of `frames`, having asked for the client's requests up front, and
     /// checks the client sends its half in order and never two requests at once. Returns each
     /// request's answer.
-    func replay(_ frames: [JSON], file: StaticString = #filePath, line: UInt = #line) -> [Result<Body, RequestFailure>] {
+    /// With `syncedByHand`, the frames leave out the clock and the sync after `INFO`, as the
+    /// bootloader's do, and they are answered here.
+    func replay(
+        _ frames: [JSON], syncedByHand: Bool = false, file: StaticString = #filePath, line: UInt = #line
+    ) -> [Result<Body, RequestFailure>] {
         var answers: [Result<Body, RequestFailure>] = []
         connection.open()
         for f in frames where f["from"]!.string == "client" {
@@ -915,6 +987,12 @@ private final class Link {
                 if !out.isEmpty { out.removeFirst() }
             } else {
                 connection.receive(f["frame"]!.bytes)
+                if syncedByHand, f["type"]!.string == "INFO" {
+                    for answer in [Body.ok, .synced(news: 0)] {
+                        let request = try! Frame.decode(out.removeFirst())
+                        connection.receive(try! Frame(seq: request.seq, body: answer).encode())
+                    }
+                }
             }
         }
         XCTAssertEqual(out, [], file: file, line: line)
@@ -933,6 +1011,7 @@ private final class Node {
     var version: UInt8 = Companion.version
     var board = "heltec-v3"
     var release = "0.2.0"
+    var update = Body.updateOverLink
     var newsCount: UInt8 = 0
     var sent: [[UInt8]] = []
     var events: [ConnectionEvent] = []
@@ -969,7 +1048,10 @@ private final class Node {
         case .hello:
             newsCount = 0
             let v4 = min(version, connection.version) >= 4
-            answer = .info(version: version, firmware: "test", board: v4 ? board : nil, release: v4 ? release : nil)
+            let v12 = min(version, connection.version) >= 12
+            answer = .info(
+                version: version, firmware: "test", board: v4 ? board : nil, release: v4 ? release : nil,
+                update: v12 ? update : nil)
         case .sync: answer = syncedAnswer
         case .send, .sendGroup, .sendInvite: answer = .queued(id: 1)
         case .makeGroup: answer = .made(group: Node.hut)
