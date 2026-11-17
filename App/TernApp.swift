@@ -72,6 +72,23 @@ struct RootView: View {
             .sheet(isPresented: Binding(get: { model.needsSetup }, set: { _ in })) {
                 SetupView().environmentObject(model)
             }
+            // A node that pairs with the default PIN, said over whichever screen is showing, once
+            // each connection. Choosing one goes to the Node tab, which asks for it.
+            .alert(
+                "Choose a PIN",
+                isPresented: Binding(
+                    get: { model.alertsForPasskey && model.isConnected && !model.needsSetup },
+                    set: { _ in })
+            ) {
+                Button("Not Now", role: .cancel) { model.putOffPasskey() }
+                Button("Choose PIN") {
+                    model.choosePasskey()
+                    section = .node
+                }
+            } message: {
+                Text("This node has no screen, so it pairs with the default PIN, \(Companion.screenlessPasskey). "
+                    + "Until you choose your own, anyone nearby who knows the default can connect to it.")
+            }
             // A conversation opened from a notification is on the Chats screen.
             .onChange(of: model.opened) { _ in section = .chats }
             // A ternmesh.org link opened, as a QR code or a message holds one: whose it is, to add,
@@ -182,12 +199,12 @@ func words(_ state: BluetoothLink.State, turnedOff: Bool = false) -> String {
     case .disconnected: return "Disconnected. Tern stays off the node until you connect. Messages wait for you on the node."
     case .scanning: return "Looking for nodes…"
     case .connecting: return "Connecting…"
-    case .pairing: return "Pairing. If asked, type the passkey the node shows."
+    case .pairing: return "Pairing. If asked, type the PIN the node shows."
     case .opening: return "Saying hello…"
     case .syncing: return "Syncing…"
     case .ready: return "Connected."
     case .failed(.pairing):
-        return "Pairing failed. Check the passkey and try again. If the node's bonds were cleared, "
+        return "Pairing failed. Check the PIN and try again. If the node's bonds were cleared, "
             + "forget it in the system's Bluetooth settings first."
     case let .failed(.mtu(maximum)):
         return "The Bluetooth link carries at most \(maximum) bytes, less than the node's frames need."

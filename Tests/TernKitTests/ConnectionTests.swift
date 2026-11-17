@@ -20,8 +20,8 @@ final class ConnectionTests: XCTestCase {
         let link = Link(Connection(now: { 0 }, wallTime: { time }))
         let answers = link.replay(frames)
 
-        XCTAssertEqual(answers.count, 28)
-        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 24, "every request answered but four")
+        XCTAssertEqual(answers.count, 29)
+        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 25, "every request answered but four")
         XCTAssertEqual(answers.last, .success(.ok), "OFF is answered, before the node turns off")
         let refused = answers.indices.filter { answers[$0] == .failure(.refused(code: ErrorCode.refused)) }
         XCTAssertEqual(
@@ -33,6 +33,7 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(r.me?.region, "EU868")
         XCTAssertEqual(r.me?.cards, 0, "cards turned on, then off")
         XCTAssertEqual(r.me?.cardName, "Ada · hut warden", "the name is kept while they are off")
+        XCTAssertEqual(r.me?.pairing, NodeSelf.pairingSet, "the user set their own passkey")
         XCTAssertEqual(r.syncedVersion, Companion.version)
         XCTAssertEqual(r.contacts.values.map(\.name).sorted(), ["Bob", "Carol", "Dave (trail crew)"])
         XCTAssertEqual(r.contacts.values.map(\.session), [0, 0, 0], "Bob's session ended; the others never had one")
@@ -157,6 +158,20 @@ final class ConnectionTests: XCTestCase {
         XCTAssertNil(r.me?.cards)
         XCTAssertNil(r.me?.cardName)
         XCTAssertEqual(r.cards, [:])
+    }
+
+    /// A client of version 10 is sent a `SELF` without `pairing`, and keeps the rest of it.
+    func testOlderVersion10() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 10 }!
+        let link = Link(Connection(version: 10, now: { 0 }, wallTime: nil))
+        _ = link.replay(older["frames"]!.array)
+        XCTAssertEqual(link.connection.agreed, 10)
+        let r = link.connection.records
+        XCTAssertEqual(r.syncedVersion, 10)
+        XCTAssertEqual(r.me?.region, "EU868")
+        XCTAssertEqual(r.me?.most, 0)
+        XCTAssertNil(r.me?.pairing)
+        XCTAssertEqual(link.events.filter { $0 == .synced }.count, 1)
     }
 
     /// A client of version 8 does not send `OFF`, which is version 9's; the node refuses it from

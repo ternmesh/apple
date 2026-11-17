@@ -29,7 +29,7 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 10, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 11, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
@@ -87,6 +87,12 @@ until the user does.
 From a node of version 10, the Node tab says when the node sends at the most it may, which the node
 works out for its board, its antenna and its region, and offers to go back to it once a number has
 been set.
+
+From a node of version 11, the Node tab says how the node pairs: a new PIN (the specification's
+passkey) on its screen, the default 123456 of a node without a screen, or one the user set. While a
+node pairs with 123456, which anyone nearby who knows it can pair with too, an alert over whichever
+screen is showing asks the user once each connection to choose their own, and Choose PIN goes to the
+Node tab, which asks for it. Use Default goes back to the node's default.
 
 Cards are per [draft/cards.md](https://github.com/ternmesh/spec/blob/main/draft/cards.md), with a
 node of version 6 or later. Who's About, reached from Contacts, lists the cards the node holds, the

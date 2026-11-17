@@ -82,6 +82,23 @@ final class RecordsFileTests: XCTestCase {
         XCTAssertEqual(Records(decoding: r.encoded() + [UInt8(entry.count)] + entry), r.kept)
     }
 
+    /// A file written when the client spoke version 10, as every one before version 11 was, holds
+    /// a `SELF` without `pairing`: it is read with its cards and the most, and says nothing of
+    /// pairing.
+    func testASelfOfVersion10IsReadWithTheMost() throws {
+        var r = try held().kept
+        r.syncedVersion = 10
+        r.me?.cards = 1
+        r.me?.cardName = "Ada"
+        r.me?.most = 1
+        r.me?.pairing = nil
+        let back = Records(decoding: r.encoded())
+        XCTAssertEqual(back, r)
+        XCTAssertEqual(back.me?.cardName, "Ada")
+        XCTAssertEqual(back.me?.most, 1)
+        XCTAssertNil(back.me?.pairing)
+    }
+
     /// A file written when the client spoke version 9, as every one before version 10 was, holds a
     /// `SELF` without `most`: it is read with its cards, and says nothing of the most.
     func testASelfOfVersion9IsReadWithItsCards() throws {
@@ -90,6 +107,7 @@ final class RecordsFileTests: XCTestCase {
         r.me?.cards = 1
         r.me?.cardName = "Ada"
         r.me?.most = nil
+        r.me?.pairing = nil
         let back = Records(decoding: r.encoded())
         XCTAssertEqual(back, r)
         XCTAssertEqual(back.me?.cards, 1)
@@ -105,6 +123,7 @@ final class RecordsFileTests: XCTestCase {
         r.me?.cards = nil
         r.me?.cardName = nil
         r.me?.most = nil
+        r.me?.pairing = nil
         let file = r.encoded()
         let me = try Frame(seq: 0, body: .nodeSelf(r.me!)).encode()
         XCTAssertEqual(Array(file[11..<12 + me.count]), [UInt8(me.count)] + me, "SELF is the first entry, and ends at time")

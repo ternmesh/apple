@@ -13,7 +13,8 @@
 //
 // A SELF from a node of version 5 or earlier, or one a client of version 5 wrote, ends before
 // `cards` and `card_name`: it is read as version 5's, and says nothing of cards. One of version 6
-// to 9 ends before `most`: it is read as version 9's, and says nothing of the most.
+// to 9 ends before `most`: it is read as version 9's, and says nothing of the most. One of
+// version 10 ends before `pairing`: it is read as version 10's, and says nothing of pairing.
 //
 // Positions, sharing, cards and the node's own fix are not kept. A position's or a fix's age,
 // sharing's minutes left and how long ago a card was heard are as of when the record was sent, so
@@ -92,12 +93,14 @@ extension Records {
 
 extension Records {
     /// One of the file's frames. `SELF` is the one record later versions made longer, so one
-    /// that does not read as this version's is read as the version before `most`, and then as the
-    /// version before cards: each reads a longer one too, and would drop what it does not know.
+    /// that does not read as this version's is read as the version before `pairing`, then as the
+    /// version before `most`, and then as the version before cards: each reads a longer one too,
+    /// and would drop what it does not know.
     static func kept(_ frame: [UInt8]) -> Frame? {
         if let read = try? Frame.decode(frame) { return read }
         guard frame.first == 0x80 else { return nil }
-        return (try? Frame.decode(frame, version: 9)) ?? (try? Frame.decode(frame, version: 5))
+        return (try? Frame.decode(frame, version: 10)) ?? (try? Frame.decode(frame, version: 9))
+            ?? (try? Frame.decode(frame, version: 5))
     }
 }
 
