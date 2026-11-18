@@ -148,7 +148,7 @@ final class ConversationsTests: XCTestCase {
         ])
         let names = r.routingNames
         XCTAssertEqual(names, [Self.bob.routingId: "Bob", Self.carol.routingId: "cacacaca…"])
-        XCTAssertEqual(Words.sender(Self.bob.routingId, names: names), "Bob")
+        XCTAssertEqual(Words.sender(Self.bob.routingId, names: names), "Bob (claimed)", "a name is what the writer claimed")
         XCTAssertEqual(Words.sender(0x0A0B_0C0D, names: names), "0a0b0c0d", "an id no contact has stays an id")
         XCTAssertEqual(Words.sender(0, names: names), "You")
     }

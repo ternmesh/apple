@@ -159,9 +159,12 @@ public enum Words {
     }
 
     /// A group message's sender: this node for 0, else the contact `names` has for its routing id
-    /// (`Records.routingNames`), else the id's eight hex digits.
+    /// (`Records.routingNames`), said to be claimed, else the id's eight hex digits. Any member can
+    /// write any routing id, so a name it matches is never shown as a contact's is
+    /// (draft/groups.md, Receiving).
     public static func sender(_ id: UInt32, names: [UInt32: String] = [:]) -> String {
-        id == 0 ? "You" : names[id] ?? routingId(id)
+        if id == 0 { return "You" }
+        return names[id].map { "\($0) (claimed)" } ?? routingId(id)
     }
 
     /// A routing id in hex, all eight digits.
