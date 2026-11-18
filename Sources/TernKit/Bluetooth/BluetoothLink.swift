@@ -398,15 +398,17 @@ extension BluetoothLink: CBCentralManagerDelegate {
         let name = peripheral.name ?? advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? "Tern node"
         var list = found
         let node = FoundNode(id: peripheral.identifier, name: name, rssi: rssi)
+        // In the order the nodes were first heard, each kept in its place as its signal changes:
+        // sorted by signal, two nodes close by swap places and cannot be tapped.
         if let i = list.firstIndex(where: { $0.id == node.id }) {
-            // Notifications of the same node come many times a second: move it only when its
+            // Notifications of the same node come many times a second: redraw only when its
             // signal has changed enough to say so.
             if list[i].name == node.name, abs(list[i].rssi - node.rssi) < 6 { return }
             list[i] = node
         } else {
             list.append(node)
         }
-        found = list.sorted { $0.rssi > $1.rssi }
+        found = list
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
