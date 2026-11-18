@@ -31,7 +31,7 @@ extension Frame {
             w.u8(version)
         case let .sync(after):
             w.u32(after)
-        case .ping, .off, .ok, .updateEnd, .updateBootloader:
+        case .ping, .off, .ok, .updateEnd, .updateBootloader, .wipe:
             break
         case let .synced(news):
             if let news { w.u8(news) }
@@ -78,9 +78,10 @@ extension Frame {
             w.u32(id)
         case let .joinLink(link), let .link(link):
             try w.str(link, limit: Companion.linkMax, field: "link")
-        case let .updateBegin(size, digest):
+        case let .updateBegin(size, digest, signature):
             w.u32(size)
             w.digest(digest)
+            if let signature { try w.blob(signature, limit: ImageSignature.length, field: "signature") }
         case let .updateData(offset, data):
             w.u32(offset)
             try w.blob(data, limit: Companion.updateChunk, field: "data")
@@ -260,10 +261,15 @@ extension Frame {
         case 0x25: body = .join(id: try r.u32())
         case 0x26: body = .groupLink(group: try r.gid())
         case 0x27: body = .joinLink(link: try r.str(limit: Companion.linkMax))
-        case 0x30: body = .updateBegin(size: try r.u32(), digest: try r.digest())
+        case 0x30:
+            // A client of version 12 or earlier sends no `signature`.
+            body = .updateBegin(
+                size: try r.u32(), digest: try r.digest(),
+                signature: version >= 13 ? try r.blob(limit: ImageSignature.length) : nil)
         case 0x31: body = .updateData(offset: try r.u32(), data: try r.blob(limit: Companion.updateChunk))
         case 0x32: body = .updateEnd
         case 0x36: body = .updateBootloader
+        case 0x37: body = .wipe
         case 0x33:
             body = .setPosition(
                 lat: try r.i32(), lon: try r.i32(), altitude: try r.i16(), accuracy: try r.u16(), age: try r.u16())

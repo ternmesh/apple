@@ -7,6 +7,10 @@
 //    {"board":"heltec-t114","region":"US915","file":"tern-heltec-t114-us915-0.2.0.zip",
 //     "size":360000,"sha256":"<64 hex>","update":"bootloader"}]}
 //
+// From the first signed release, each entry also has `signature`: the 64 bytes of the file's
+// `.sig`, as 128 lowercase hex digits, Ed25519 by a release key over "TERN-FIRMWARE-V1" and the
+// 32 bytes of `sha256` (ImageSignature.swift). An entry of a release from before has none.
+//
 // `file` is relative to https://ternmesh.org/firmware/. `update` says how the image goes to the
 // node: absent, over the companion protocol's link, as an image of the node's own; "bootloader",
 // a DFU package for the node's bootloader. An app from before it never sees a board from a node
@@ -59,6 +63,14 @@ public struct FirmwareManifest: Equatable, Sendable {
             guard case let .string(hex)? = entry["sha256"], hex.utf8.count == 64, let digest = Digest(hex: hex) else {
                 throw ReadError.bad(field: "sha256")
             }
+            var signature: [UInt8]?
+            switch entry["signature"] {
+            case nil: signature = nil
+            case let .string(hex)? where hex.utf8.count == 2 * ImageSignature.length:
+                guard let bytes = Hex.decode(hex) else { throw ReadError.bad(field: "signature") }
+                signature = bytes
+            default: throw ReadError.bad(field: "signature")
+            }
             let update: UpdateMethod
             switch entry["update"] {
             case nil: update = .link
@@ -68,7 +80,8 @@ public struct FirmwareManifest: Equatable, Sendable {
             default: throw ReadError.bad(field: "update")
             }
             images.append(FirmwareImage(
-                board: board, region: region, file: file, size: Int(n), sha256: digest, update: update))
+                board: board, region: region, file: file, size: Int(n), sha256: digest, update: update,
+                signature: signature))
         }
         self.init(release: release, images: images)
     }
@@ -101,14 +114,37 @@ public struct FirmwareImage: Equatable, Sendable {
     public var sha256: Digest
     /// How it goes to the node: an image over the link, or a DFU package by its bootloader.
     public var update: UpdateMethod
+    /// The file's signature, 64 bytes; nil for a release published before releases were signed.
+    public var signature: [UInt8]?
 
-    public init(board: String, region: String, file: String, size: Int, sha256: Digest, update: UpdateMethod = .link) {
+    public init(
+        board: String, region: String, file: String, size: Int, sha256: Digest, update: UpdateMethod = .link,
+        signature: [UInt8]? = nil
+    ) {
         self.board = board
         self.region = region
         self.file = file
         self.size = size
         self.sha256 = sha256
         self.update = update
+        self.signature = signature
+    }
+
+    /// Who made it, as far as the release keys say: checked against `sha256`, which the bytes
+    /// downloaded are checked against in turn (`matches`).
+    public func signatureCheck(keys: [[UInt8]] = ReleaseKeys.all) -> ImageSignature.Check {
+        ImageSignature.check(signature, digest: sha256, keys: keys)
+    }
+
+    /// Whether a node may be given this image, and how. `nodeVersion` is the node's `INFO`
+    /// version.
+    public func offer(nodeVersion: UInt8, keys: [[UInt8]] = ReleaseKeys.all) -> ImageOffer {
+        let check = signatureCheck(keys: keys)
+        if check == .verified { return .signed }
+        // A node of version 13 updated over the link checks the signature itself, and refuses an
+        // image with none: there is nothing the user could insist on.
+        if check == .unsigned, update == .link, nodeVersion >= 13 { return .refusedByNode }
+        return .warn(check)
     }
 
     /// Where to download it.
@@ -125,6 +161,16 @@ public struct FirmwareImage: Equatable, Sendable {
             ("a"..."z").contains(c) || ("A"..."Z").contains(c) || ("0"..."9").contains(c) || c == "." || c == "-" || c == "_"
         }
     }
+}
+
+/// Whether an image is offered to a node.
+public enum ImageOffer: Equatable, Sendable {
+    /// Signed by a release key: offered as it is.
+    case signed
+    /// Not known to be the release's: offered only if the user asks after `Words.signature(check)`.
+    case warn(ImageSignature.Check)
+    /// Not signed, to a node that checks signatures (version 13, over the link): not offered.
+    case refusedByNode
 }
 
 /// How a client gives a node new firmware.

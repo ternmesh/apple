@@ -53,6 +53,9 @@ struct FirmwareOffer: Equatable {
     var image: FirmwareImage
     /// The release against the one the node runs.
     var comparison: ReleaseComparison
+    /// Who made it, as far as the release keys say. One that is not `.verified` is installed only
+    /// if the user asks after `Words.signature(check)`.
+    var check: ImageSignature.Check
 }
 
 /// Where updating the node's firmware is.
@@ -120,11 +123,14 @@ final class NodeModel: ObservableObject {
     @Published private(set) var records = Records() {
         didSet {
             feedPosition()
-            if records.contacts != oldValue.contacts { routingNames = records.routingNames }
+            if records.contacts != oldValue.contacts || records.routingVersion != oldValue.routingVersion {
+                routingNames = records.routingNames
+            }
         }
     }
     @Published private(set) var conversations: [Conversation] = []
-    /// The contacts' names by routing id, for neighbours and group members.
+    /// The contacts' names by routing id, for neighbours and group members, as the node's version
+    /// makes routing ids (`Records.routingId(of:)`).
     @Published private(set) var routingNames: [UInt32: String] = [:]
     @Published private(set) var outgoing: [Outgoing] = [] {
         didSet { keepOutgoing() }
@@ -811,6 +817,45 @@ final class NodeModel: ObservableObject {
         }
     }
 
+    // MARK: Erasing the node
+
+    /// Whether the node can be erased from here: version 13 or later. A node before it would
+    /// refuse `WIPE`, and none is offered.
+    var speaksWipe: Bool { (agreed ?? 0) >= 13 }
+
+    /// Erases the node: `WIPE`. Only ever because the user asked, once told what goes for good.
+    /// Once the node answers, it erases itself and restarts as a new node, with a new address and
+    /// no bonds: the app forgets it and everything it kept of it, and tells the user to remove its
+    /// pairing from the system's Bluetooth settings, which an app cannot do.
+    func wipe() {
+        guard speaksWipe, let id = remembered else { return }
+        guard let c = link.connection else {
+            problem = Words.failure(.closed)
+            return
+        }
+        c.submit(.wipe) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(.ok):
+                guard self.remembered == id else { return }
+                let delivered = UNUserNotificationCenter.current()
+                delivered.getDeliveredNotifications { notes in
+                    let mine = notes.map(\.request.identifier).filter { $0.contains(id.uuidString) }
+                    delivered.removeDeliveredNotifications(withIdentifiers: mine)
+                }
+                self.forget(id)
+                self.notice = Words.wipeForgetBond
+            case .success:
+                self.problem = "The node answered something the app did not expect. It may not have been erased."
+            case .failure(.noAnswer):
+                self.problem = "The node did not answer. It may have been erased: if it no longer connects, "
+                    + "forget it here and in the system's Bluetooth settings, and pair it again as a new node."
+            case let .failure(f):
+                self.problem = Words.failure(f)
+            }
+        }
+    }
+
     /// Notes whether the app's node was turned off, across runs too, so that the app says so in place
     /// of only disconnected.
     private func setTurnedOff(_ off: Bool) {
@@ -840,6 +885,7 @@ final class NodeModel: ObservableObject {
         }
         let running = release ?? ""
         checkedAgainst = running
+        let nodeVersion = self.nodeVersion ?? 0
         firmwareStatus = .checking
         firmwareTask?.cancel()
         firmwareTask = Task { [weak self] in
@@ -847,8 +893,14 @@ final class NodeModel: ObservableObject {
             do {
                 let manifest = try FirmwareManifest(json: try await Self.fetch(FirmwareManifest.latest, fresh: true))
                 if let image = manifest.image(board: board, region: region, update: method) {
-                    status = .found(FirmwareOffer(
-                        release: manifest.release, image: image, comparison: manifest.compared(to: running)))
+                    switch image.offer(nodeVersion: nodeVersion) {
+                    case .refusedByNode:
+                        status = .nothing("Release \(manifest.release) is available. " + Words.unsignedToCheckingNode)
+                    case .signed, .warn:
+                        status = .found(FirmwareOffer(
+                            release: manifest.release, image: image, comparison: manifest.compared(to: running),
+                            check: image.signatureCheck()))
+                    }
                 } else {
                     status = .nothing("There is no firmware for \(board) in \(region) in release \(manifest.release).")
                 }
@@ -864,7 +916,9 @@ final class NodeModel: ObservableObject {
         }
     }
 
-    /// Downloads the image offered, checks it, and sends it to the node.
+    /// Downloads the image offered, checks it, and sends it to the node. Called only once the user
+    /// has confirmed, which for an image not signed by a release key means once they were told
+    /// that it may not be the release's and asked to install it anyway.
     func update() {
         guard linkState == .ready, case let .found(offer) = firmwareStatus, let id = remembered else { return }
         guard stillFor(offer) else { return }
@@ -877,11 +931,19 @@ final class NodeModel: ObservableObject {
             do {
                 let bytes = try await Self.fetch(offer.image.url, fresh: false)
                 let image = offer.image
-                // A megabyte's digest takes a moment: not on the main thread.
-                let good = await Task.detached(priority: .userInitiated) { image.matches(bytes) }.value
+                // A megabyte's digest takes a moment: not on the main thread. The signature is
+                // checked again over the downloaded bytes' own digest, not only the manifest's.
+                let (good, check) = await Task.detached(priority: .userInitiated) {
+                    (image.matches(bytes), ImageSignature.check(image.signature, digest: SHA256.hash(bytes)))
+                }.value
                 guard let self, !Task.isCancelled else { return }
                 guard good else {
                     self.firmwareStatus = .failed("The image downloaded is not the one the release lists. Try again.")
+                    return
+                }
+                // What the user agreed to was this check: anything else is not what they were told.
+                guard check == offer.check else {
+                    self.firmwareStatus = .failed("The firmware downloaded is not signed as the release says. It was not sent.")
                     return
                 }
                 self.downloaded = (image, bytes)
@@ -996,7 +1058,9 @@ final class NodeModel: ObservableObject {
 
     private func send(_ bytes: [UInt8], _ offer: FirmwareOffer) {
         guard stillFor(offer) else { return }
-        let u = Updater(image: bytes, digest: offer.image.sha256)
+        // A node of version 13 or later is sent the signature, and checks it itself; the connection
+        // leaves it out for one before.
+        let u = Updater(image: bytes, digest: offer.image.sha256, signature: offer.image.signature ?? [])
         updater = u
         updateOffer = offer
         u.onChange = { [weak self, weak u] in

@@ -102,7 +102,7 @@ struct PeopleView: View {
 
     /// How many are near: the cards the node holds, and the neighbours that sent none.
     private var nearCount: Int {
-        let cards = model.speaksCards ? Set(model.records.cards.keys.map(\.routingId)) : []
+        let cards = model.speaksCards ? Set(model.records.cards.keys.map(model.records.routingId(of:))) : []
         return cards.count + model.records.neighbours.keys.filter { !cards.contains($0) }.count
     }
 
@@ -127,7 +127,7 @@ struct ContactRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if let n = model.records.neighbours[contact.address.routingId] {
+            if let n = model.records.neighbours[model.records.routingId(of: contact.address)] {
                 SignalBars(quarterDb: n.snrQuarterDb)
             }
         }

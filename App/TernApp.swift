@@ -205,12 +205,16 @@ func words(_ state: BluetoothLink.State, turnedOff: Bool = false) -> String {
     case .disconnected: return "Disconnected. Tern stays off the node until you connect. Messages wait for you on the node."
     case .scanning: return "Looking for nodes…"
     case .connecting: return "Connecting…"
-    case .pairing: return "Pairing. If asked, type the PIN the node shows."
+    case .pairing:
+        return "Pairing. If asked, type the PIN the node shows on its screen, or, on a node with no "
+            + "screen, its PIN within 3 minutes of pressing its button or turning it on."
     case .opening: return "Saying hello…"
     case .syncing: return "Syncing…"
     case .ready: return "Connected."
     case .failed(.pairing):
-        return "Pairing failed. Check the PIN and try again. If the node's bonds were cleared, "
+        // A node pairs with a PIN it does not show only for three minutes after someone has
+        // been at it (the specification's pairing window).
+        return Words.pairingWindow + " If the node was erased or its pairings cleared, "
             + "forget it in the system's Bluetooth settings first."
     case let .failed(.mtu(maximum)):
         return "The Bluetooth link carries at most \(maximum) bytes, less than the node's frames need."

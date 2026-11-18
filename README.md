@@ -11,7 +11,8 @@ It finds a node over Bluetooth LE, pairs with it by passkey, and from then on ke
 whenever it is in range, in the background too: chats with contacts and groups, invites, contacts
 and the addresses the node refused, who is about, the node's battery, airtime, neighbours and
 settings, its presence card and satellite receiver, where the node is, positions shared with the node on a map and sharing the user's own,
-updates to its firmware from [ternmesh.org](https://ternmesh.org/firmware/), and turning the node off.
+updates to its firmware from [ternmesh.org](https://ternmesh.org/firmware/), checked against Tern's
+release keys, turning the node off, and erasing it.
 
 ```bash
 brew install xcodegen && xcodegen && open Tern.xcodeproj   # the app, for iPhone, iPad and Mac
@@ -23,13 +24,18 @@ The app needs Xcode 15 or later, and runs on iOS 16 and macOS 13 or later. `xcod
 Signing to run it on a device.
 
 TernKit needs Swift 5.9 or later. Everything in it but the Bluetooth link uses only the standard
-library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on it alone.
+library and [libsodium](https://libsodium.org), so the tests run on Linux too. libsodium does the
+Ed25519 the standard library has nothing for: routing ids from a key blinded from an address, and
+release signatures. It comes from [swift-sodium](https://github.com/jedisct1/swift-sodium), pinned
+to one commit in `Package.swift`: on Apple's platforms as the xcframework that package carries, and
+on Linux as the system's (`apt-get install libsodium-dev pkg-config`). Open `Package.swift` in Xcode
+to work on it alone.
 
 ## Where things are
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 12, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 14, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
@@ -37,7 +43,8 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 | `Sources/TernKit/Connection/Records.swift` | What the node has said it holds, as news leaves it, positions, sharing, cards and the node's own fix included, and the `after` the next sync asks from. |
 | `Sources/TernKit/Connection/RecordsFile.swift` | The records on disk: a short header, then each record as the frame that carried it, but for positions, sharing, cards and the node's own fix, which every sync sends again. The Android app writes the same bytes. |
 | `Sources/TernKit/Connection/Conversations.swift` | The records as conversations, with what is unread; the `through` a `READ` may go to without marking another conversation's; and what is new enough to notify of. |
-| `Sources/TernKit/Connection/RoutingNames.swift` | An address's routing id, and the contacts' names by theirs: what a neighbour or a group message's writer shows as, when it is a contact. |
+| `Sources/TernKit/Connection/RoutingNames.swift` | An address's routing id as the node's version makes it, from the address itself before version 14 and from the key blinded from it after, kept once worked out; and the contacts' names by theirs: what a neighbour or a group message's writer shows as, when it is a contact. |
+| `Sources/TernKit/Crypto/Ed25519.swift` | The few calls into libsodium: SHA-512, a scalar mod L, a valid address, a point multiplied, a signature checked. |
 | `Sources/TernKit/Connection/Cards.swift` | Who is about as a person reads it: the cards held, most recently heard first, each counted on from when its record came; the name a node's cards may carry; a card's name shown as its sender's claim. |
 | `Sources/TernKit/Connection/Words.swift` | The protocol's numbers in words: states, reasons, refusals, roles, how an update ended. |
 | `Sources/TernKit/Update/Updater.swift` | One firmware image sent to a node: `UPDATE_BEGIN`, on from the offset the node gives, `UPDATE_DATA` a chunk at a time, `UPDATE_END`, and going on after the link drops. Through the connection, with no I/O of its own. |
@@ -45,12 +52,14 @@ library, so the tests run on Linux too. Open `Package.swift` in Xcode to work on
 | `Sources/TernKit/Update/DFU.swift` | Nordic's legacy DFU, as an nRF52840 node's bootloader speaks it: the package's init packet and application, and the client, through a transport of three calls (write the control point, write a packet, wait for a notification), so that a bootloader played by hand tests it. |
 | `Sources/TernKit/Update/Zip.swift` | Just enough of a .zip to read a DFU package: stored and deflated entries, checked against their CRC-32, with an inflater of TernKit's own. |
 | `Sources/TernKit/Update/Release.swift` | The release manifest at `ternmesh.org/firmware/latest.json`, the image in it for a node's board, region and way of being updated, and Semantic Versioning's order, with the little JSON it needs. |
-| `Sources/TernKit/Update/SHA256.swift` | SHA-256, for an image's digest: TernKit's own, so that it keeps to the standard library. |
+| `Sources/TernKit/Update/ReleaseKeys.swift` | The release keys, the same list as the firmware's `ports/node/release_keys.h`: the one place a key is added. |
+| `Sources/TernKit/Update/Signature.swift` | An image's signature checked against them: Ed25519 over `"TERN-FIRMWARE-V1"` and the image's SHA-256. |
+| `Sources/TernKit/Update/SHA256.swift` | SHA-256, for an image's digest and routing ids: TernKit's own, so that it needs nothing of Apple's. |
 | `Sources/TernKit/Bluetooth/BluetoothLink.swift` | Core Bluetooth: scanning, connecting, pairing, the MTU, a frame to each write and notification, reconnecting to the remembered node, and restoring in the background. Built only where Core Bluetooth is. |
 | `Sources/TernKit/Bluetooth/BootloaderLink.swift` | Core Bluetooth for a node's bootloader: found by the DFU service, on a central of its own, and the DFU client's transport, each packet written without a response once the link can take it. |
 | `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, the firmware it downloads and sends, and the phone's position given to the node while it shares, from `LocationFeed`), `Notifications` (a tap or a reply on one), and the screens: Connect (the whole window until a node is chosen, then Switch Node), and the Chats, People (contacts, and who is near), Map and Node tabs, the node's dashboard with a screen for each thing about it, with the share sheet. `Design` holds what they share: avatars, signal bars and the node's status pill. The map is MapKit's own view (`PositionMap`), which draws a cell before iOS 17 and macOS 14. |
 | `project.yml` | The Xcode project, for XcodeGen: one target for iOS and macOS. |
-| `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, frames of later versions in `unknown_to_older`, the updater as the client in `update`, and the bootloader's connections; the DFU client against a bootloader played by hand, and the package against ones `adafruit-nrfutil` made (`fixtures/`). The records file, conversations and `READ`'s rule, routing ids against routing.md's vectors; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
+| `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, frames of later versions in `unknown_to_older`, the updater as the client in `update`, and the bootloader's connections, `wipe`, and the client of version 12 refused an unsigned update; the signatures in `signatures`, and the routing ids in routing.json's `ids` and `no_ids`; the DFU client against a bootloader played by hand, and the package against ones `adafruit-nrfutil` made (`fixtures/`). The records file, conversations and `READ`'s rule, routing ids against routing.md's vectors; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
 
 The vectors' `group_ids` are run against the join code reader, which works out the id of the
 group a code is for, so that the app can say whether the node holds it already; `groups.json`'s
@@ -81,11 +90,47 @@ again, says its new release. An update that stops part of the way leaves the boo
 over Bluetooth, with everything the node held kept, and the app says so: updating again goes straight
 to it. A node whose `update` is 0 says it can be updated only over USB, and the app says so.
 
-`Tests/TernKitTests/vectors/companion.json` is a copy of the specification's
-[`vectors/companion.json`](https://github.com/ternmesh/spec/blob/main/vectors/companion.json).
+`Tests/TernKitTests/vectors/companion.json` and `routing.json` are copies of the specification's
+[`vectors/companion.json`](https://github.com/ternmesh/spec/blob/main/vectors/companion.json) and
+[`vectors/routing.json`](https://github.com/ternmesh/spec/blob/main/vectors/routing.json).
 CI runs the tests against the copy, and against the specification's own as it is on `main`, which
 also runs once a week: if the specification changes, that job fails or warns. Copy the new file
 here in the pull request that changes the code to match.
+
+From a node of version 13, updates are signed ([Signed images](https://github.com/ternmesh/spec/blob/main/draft/companion.md#signed-images)).
+Each release's image is signed by a release key, over `"TERN-FIRMWARE-V1"` and the image's SHA-256,
+and the manifest carries the signature beside the digest (`"signature"`, 128 hex digits). The app
+checks it against its release keys before downloading, and again over the downloaded bytes, and
+sends it in `UPDATE_BEGIN` to a node of version 13 or later, which checks it too and refuses with
+`ERROR` 11 an image not signed by a key it holds: the app says so. An image that does not verify,
+or a release from before releases were signed (0.6.0-alpha.1 and earlier, which have none), is
+offered only behind a warning that it may not be the release's, and installed only if the user
+chooses Install Anyway. To a node of version 13 or later updated over the link, an image with no
+signature is not offered at all: the node would refuse it, so the app says to update it over USB.
+An nRF52840 node's package is checked the same way before the node is asked to restart into its
+bootloader, which checks nothing itself, and the app says that while the bootloader waits anyone in
+Bluetooth range can install an image on it, until the update finishes.
+
+The release keys are in `Sources/TernKit/Update/ReleaseKeys.swift`: release key 1, added
+2026-11-18, the key of [ternmesh/firmware#120](https://github.com/ternmesh/firmware/pull/120). To add
+a key, add one line there, the key's 64 hex digits under a comment saying when it was added, as the
+firmware's `tools/release_key.py public` prints it, once the firmware lists it in
+`ports/node/release_keys.h`. The specification's published test key is only ever in the tests.
+
+From a node of version 13, the Node tab also erases the node (`WIPE`), once the user has been told
+that its address, contacts, groups and messages go for good and that it must be paired again. Once
+the node answers, the app forgets it and everything it kept of it, and asks the user to remove the
+node in the system's Bluetooth settings too, which an app cannot do.
+
+When pairing fails, the app says to press the node's button, or turn it off and on (RESET on a board
+with no button), and pair within 3 minutes, or to type the PIN a node with a screen shows: a node
+takes a PIN it does not show only for three minutes after someone has been at it.
+
+From a node of version 14, announces carry a key blinded from each node's address, and the node
+gives the app routing ids made from that key. The app works out each contact's the same way
+(`h = SHA-512("tern v0 blind" || A || 0) mod L`, `B = [h]A`, the id from `B`) and keeps it, and
+matches neighbours, group messages' writers and group members' positions by it; for a node of
+version 13 or earlier, by the id made from the address itself.
 
 Positions are per [draft/positions.md](https://github.com/ternmesh/spec/blob/main/draft/positions.md),
 with a node of version 5 or later. The Map tab shows each position the node holds at the centre of

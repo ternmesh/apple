@@ -109,8 +109,11 @@ final class CompanionVectorTests: XCTestCase {
             for f in c["frames"]!.array {
                 let name = f["type"]!.string
                 // The clients of versions 1 and 3 to 8 end with a request their version does not
-                // define, or a setting it does not.
-                if let latest = try? Frame.decode(f["frame"]!.bytes), latest.body.since > version {
+                // define, or a setting it does not. A client of version 12 or earlier sends
+                // `UPDATE_BEGIN` without a signature, which the latest version reads as cut short.
+                let bytes = f["frame"]!.bytes
+                if let latest = (try? Frame.decode(bytes)) ?? (try? Frame.decode(bytes, version: 12)),
+                   latest.body.since > version {
                     XCTAssertThrowsError(try Frame.decode(f["frame"]!.bytes, version: version), name)
                     continue
                 }
@@ -146,7 +149,7 @@ final class CompanionVectorTests: XCTestCase {
         let connections = v["bootloader"]!.array.map(\.array)
         XCTAssertEqual(connections.count, 2)
         for frames in connections {
-            let version = UInt8(try Frame.decode(frames[0]["frame"]!.bytes).body == .hello(version: 12) ? 12 : 11)
+            guard case let .hello(version) = try Frame.decode(frames[0]["frame"]!.bytes).body else { return XCTFail() }
             for f in frames {
                 let bytes = f["frame"]!.bytes
                 let frame = try Frame.decode(bytes, version: Frame.version(toRead: bytes, speaking: version))
@@ -220,7 +223,7 @@ final class CompanionVectorTests: XCTestCase {
             c.send = { sent.append($0) }
             c.onEvent = { events.append($0) }
             c.open()
-            let info = Body.info(version: Companion.version, firmware: "t", board: "b", release: "1")
+            let info = Body.info(version: Companion.version, firmware: "t", board: "b", release: "1", update: Body.updateOverLink)
             c.receive(try Frame(seq: sent.removeFirst()[1], body: info).encode())
             let sync = try Frame.decode(sent.removeFirst())
             guard case .sync = sync.body else { return XCTFail(name) }
@@ -421,10 +424,12 @@ final class CompanionVectorTests: XCTestCase {
         case "SYNCED": return .synced(news: f["news"].map { UInt8($0.int) })
         case "QUEUED": return .queued(id: u32("id"))
         case "MADE": return .made(group: gid("group"))
-        case "UPDATE_BEGIN": return .updateBegin(size: u32("size"), digest: Digest(f["digest"]!.bytes)!)
+        case "UPDATE_BEGIN":
+            return .updateBegin(size: u32("size"), digest: Digest(f["digest"]!.bytes)!, signature: f["signature"]?.bytes)
         case "UPDATE_DATA": return .updateData(offset: u32("offset"), data: f["data"]!.bytes)
         case "UPDATE_END": return .updateEnd
         case "UPDATE_BOOTLOADER": return .updateBootloader
+        case "WIPE": return .wipe
         case "UPDATING": return .updating(offset: u32("offset"))
         case "LINK": return .link(link: str("link"))
         case "SET_POSITION":

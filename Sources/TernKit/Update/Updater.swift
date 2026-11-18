@@ -27,6 +27,10 @@ public enum UpdateOutcome: Equatable, Sendable {
     /// cannot be updated over this protocol at all, 11 (`ErrorCode.notAnImage`) if the image is not
     /// one it runs, which it then discards.
     case refused(code: UInt8)
+    /// The node refused `UPDATE_BEGIN` with `ERROR` 11 (version 13): it takes only images signed
+    /// by a release key it holds, and this one is not. Nothing was sent, and an update under way
+    /// is as it was.
+    case untrusted
     /// The node's version, or the connection's, does not define updates.
     case unsupported
     /// The node answered something no request of an update is answered with.
@@ -57,6 +61,9 @@ public final class Updater {
 
     public let image: [UInt8]
     public let digest: Digest
+    /// The image's signature, empty for none. Sent to a node of version 13 or later, which checks
+    /// it; the connection leaves it out for one before.
+    public let signature: [UInt8]
     public private(set) var phase = Phase.idle
     /// How many bytes of the image the node has said it holds.
     public private(set) var held = 0
@@ -78,10 +85,14 @@ public final class Updater {
     ///   - image: the whole image, at least one byte.
     ///   - digest: its SHA-256, worked out if not given. A node refuses `UPDATE_END` with error 11
     ///     if it is not the image's.
-    public init(image: [UInt8], digest: Digest? = nil) {
+    ///   - signature: the image's signature (`ImageSignature`), empty for none. The caller checks it
+    ///     first: a node of version 13 refuses an image whose signature it cannot verify.
+    public init(image: [UInt8], digest: Digest? = nil, signature: [UInt8] = []) {
         precondition(!image.isEmpty && image.count <= Int(UInt32.max), "an image is 1 to 2^32 - 1 bytes")
+        precondition(signature.count <= ImageSignature.length, "a signature is 64 bytes")
         self.image = image
         self.digest = digest ?? SHA256.hash(image)
+        self.signature = signature
     }
 
     /// Whether the updater is done, one way or another.
@@ -122,7 +133,7 @@ public final class Updater {
 
     private func begin() {
         set(.beginning)
-        request(.updateBegin(size: UInt32(size), digest: digest)) { [weak self] result in
+        request(.updateBegin(size: UInt32(size), digest: digest, signature: signature)) { [weak self] result in
             guard let self else { return }
             switch result {
             case let .success(.updating(offset)):
@@ -136,6 +147,9 @@ public final class Updater {
             case .failure(.noAnswer):
                 // `UPDATE_BEGIN` for the same image is safe to send again.
                 again { self.begin() }
+            case .failure(.refused(ErrorCode.notAnImage)):
+                // At `UPDATE_BEGIN`, error 11 is the signature's: the image was never sent.
+                finish(.untrusted)
             case let .failure(f):
                 failed(f)
             }

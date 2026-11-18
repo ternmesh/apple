@@ -24,7 +24,7 @@ final class UpdaterTests: XCTestCase {
         let setTime = try XCTUnwrap(connections[0].first { $0["type"]!.string == "SET_TIME" })
         guard case let .setTime(time) = try Frame.decode(setTime["frame"]!.bytes).body else { return XCTFail() }
 
-        let updater = Updater(image: image)
+        let updater = Updater(image: image, signature: v["image_signature"]!.bytes)
         var progress: [Int] = []
         updater.onChange = { if progress.last != updater.held { progress.append(updater.held) } }
 
@@ -68,8 +68,10 @@ final class UpdaterTests: XCTestCase {
             XCTAssertEqual(Hex.encode(try frame.encode()), f["frame"]!.string)
             if case let .error(code) = frame.body { codes.append(code) }
         }
-        // The last: `UPDATE_BOOTLOADER`, to a node updated over the link, not by its bootloader.
-        XCTAssertEqual(codes, [10, 10, 3, 10, 3, 3, 10, 11, 10, 5])
+        // UPDATE_BEGINs whose signatures do not verify are refused with 11 before anything is
+        // sent, the one with no signature among them. The last: `UPDATE_BOOTLOADER`, to a node
+        // updated over the link, not by its bootloader.
+        XCTAssertEqual(codes, [10, 10, 3, 11, 11, 11, 11, 11, 10, 11, 3, 3, 10, 11, 10, 5])
     }
 
     // MARK: Against a node played by hand
@@ -78,7 +80,7 @@ final class UpdaterTests: XCTestCase {
         let node = UpdateNode()
         let updater = Updater(image: [UInt8](repeating: 9, count: 400))
         updater.resume(on: node)
-        XCTAssertEqual(node.take(), .updateBegin(size: 400, digest: updater.digest))
+        XCTAssertEqual(node.take(), .updateBegin(size: 400, digest: updater.digest, signature: []))
         node.answer(.success(.updating(offset: 0)))
         for (offset, n) in [(0, 172), (172, 172), (344, 56)] {
             guard case let .updateData(o, data) = node.take() else { return XCTFail() }
@@ -102,7 +104,7 @@ final class UpdaterTests: XCTestCase {
         node.answer(.success(.updating(offset: 172)))
         XCTAssertEqual(node.takeOffset(), 172)
         node.answer(.failure(.refused(code: ErrorCode.notThere)))
-        XCTAssertEqual(node.take(), .updateBegin(size: 400, digest: updater.digest))
+        XCTAssertEqual(node.take(), .updateBegin(size: 400, digest: updater.digest, signature: []))
         node.answer(.success(.updating(offset: 0)))
         XCTAssertEqual(node.takeOffset(), 0)
         node.answer(.success(.ok))
@@ -120,7 +122,7 @@ final class UpdaterTests: XCTestCase {
         node.answer(.success(.updating(offset: 10)))
         XCTAssertEqual(node.take(), .updateEnd)
         node.answer(.failure(.refused(code: ErrorCode.notThere)))
-        XCTAssertEqual(node.take(), .updateBegin(size: 10, digest: updater.digest))
+        XCTAssertEqual(node.take(), .updateBegin(size: 10, digest: updater.digest, signature: []))
         node.answer(.success(.updating(offset: 0)))
         XCTAssertEqual(node.takeOffset(), 0)
         node.answer(.success(.ok))
@@ -182,7 +184,10 @@ final class UpdaterTests: XCTestCase {
         updater.resume(on: c)
         answer(c, wire, .info(version: 4, firmware: "t", board: "b", release: "1.0.0"))
         answer(c, wire, .synced(news: 0))
-        XCTAssertEqual(try Frame.decode(wire.out[0]).body, .updateBegin(size: 300, digest: updater.digest))
+        // To a node of version 4, `UPDATE_BEGIN` ends at the digest: no signature, not even an
+        // empty one.
+        XCTAssertEqual(wire.out[0].count, 2 + 4 + 32)
+        XCTAssertEqual(try Frame.decode(wire.out[0], version: 4).body, .updateBegin(size: 300, digest: updater.digest))
     }
 
     /// END given up on is not sent again: the node may be restarting into the image.
@@ -207,12 +212,12 @@ final class UpdaterTests: XCTestCase {
     func testNotAnImageThisNodeRuns() throws {
         let refusals = v["refusals"]!.array
         let begin = try XCTUnwrap(refusals.last { $0["type"]!.string == "UPDATE_BEGIN" })
-        guard case let .updateBegin(_, wrong) = try Frame.decode(begin["frame"]!.bytes).body else { return XCTFail() }
+        guard case let .updateBegin(_, wrong, signature) = try Frame.decode(begin["frame"]!.bytes).body else { return XCTFail() }
 
         let node = UpdateNode()
-        let updater = Updater(image: image, digest: wrong)
+        let updater = Updater(image: image, digest: wrong, signature: signature ?? [])
         updater.resume(on: node)
-        XCTAssertEqual(try Frame(seq: 5, body: XCTUnwrap(node.take())).encode(), begin["frame"]!.bytes)
+        XCTAssertEqual(try Frame(seq: UInt8(begin["seq"]!.int), body: XCTUnwrap(node.take())).encode(), begin["frame"]!.bytes)
         node.answer(.success(.updating(offset: 0)))
         for _ in 0..<3 {
             _ = node.take()
@@ -287,7 +292,7 @@ final class UpdaterTests: XCTestCase {
         updater.resume(on: new)
         late(.success(.ok))
         XCTAssertEqual(updater.held, 0)
-        XCTAssertEqual(new.take(), .updateBegin(size: 400, digest: updater.digest))
+        XCTAssertEqual(new.take(), .updateBegin(size: 400, digest: updater.digest, signature: []))
     }
 
     // MARK: By the bootloader
@@ -478,7 +483,7 @@ final class UpdaterTests: XCTestCase {
 
     /// Answers the request `out` holds with `body`.
     private func answer(_ c: Connection, _ wire: Wire, _ body: Body) {
-        let request = try! Frame.decode(wire.out.removeFirst())
+        let request = try! Frame.decode(wire.out.removeFirst(), version: c.agreed ?? c.version)
         c.receive(try! Frame(seq: request.seq, body: body).encode())
     }
 }
