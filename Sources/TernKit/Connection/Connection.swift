@@ -324,7 +324,7 @@ public final class Connection {
     private func transmit(_ p: Pending) {
         let body: Body
         switch p.kind {
-        case let .user(b): body = b
+        case let .user(b): body = Self.asSpoken(b, agreed ?? version)
         case .hello: body = .hello(version: version)
         case .setTime: body = .setTime(wallTime?() ?? 0)
         case .ping: body = .ping
@@ -345,6 +345,13 @@ public final class Connection {
         }
         inFlight = (p, seq, now() + Companion.answerWait)
         send(bytes)
+    }
+
+    /// A request as the version both ends speak has it: `UPDATE_BEGIN` carries a `signature`,
+    /// empty for none, from version 13, and none before.
+    static func asSpoken(_ body: Body, _ version: UInt8) -> Body {
+        guard case let .updateBegin(size, digest, signature) = body else { return body }
+        return .updateBegin(size: size, digest: digest, signature: version >= 13 ? signature ?? [] : nil)
     }
 
     /// Closes on the node's account. Everything is cleared, and the app told, before any request's

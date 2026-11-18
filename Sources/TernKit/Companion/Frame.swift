@@ -1,11 +1,14 @@
-// The companion protocol's frames, version 12: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 14: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 11 is this without updates by the bootloader (the
+    /// The version this client speaks. Version 13 is this with routing ids made from the address
+    /// itself, not from a key blinded from it (RoutingNames.swift); its frames are the same.
+    /// Version 12 is version 13 without signed images and wiping (`UPDATE_BEGIN`'s `signature`
+    /// and the request `WIPE`). Version 11 is version 12 without updates by the bootloader (the
     /// request `UPDATE_BOOTLOADER` and `INFO`'s `update`), version 10 is version 11 without
     /// `SELF`'s `pairing`, version 9 is
     /// version 10 without the most (`SET` 3's -128 and `SELF`'s `most`), version 8 is version 9
@@ -18,7 +21,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 12
+    public static let version: UInt8 = 14
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -32,6 +35,7 @@ public enum Companion {
         case 0x94: 8
         case 0x06: 9
         case 0x36: 12
+        case 0x37: 13
         default: 0
         }
     }
@@ -161,7 +165,9 @@ public enum ErrorCode {
     /// Not where the update is: none is under way, or not at that offset. `UPDATE_BEGIN` again
     /// says where to go on from.
     public static let notThere: UInt8 = 10
-    /// Not an image this node runs, or its digest is wrong: the update is discarded.
+    /// To `UPDATE_END`: not an image this node runs, or its digest is wrong, and the update is
+    /// discarded. To `UPDATE_BEGIN` (version 13): the image is not signed by a release key the node
+    /// holds, and is refused at once; an update under way is left as it was.
     public static let notAnImage: UInt8 = 11
     /// Not a contact: `SHARE` to an address the node does not hold as one.
     public static let notAContact: UInt8 = 12
@@ -573,7 +579,7 @@ public struct NodeFix: Equatable, Sendable {
     public var has: Bool { source != NodeFix.noSource }
 }
 
-/// What a frame says: every frame of version 12.
+/// What a frame says: every frame of version 14.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -602,8 +608,10 @@ public enum Body: Equatable, Sendable {
     /// Join the group a join code is for, which the node answers with `MADE`. Only ever a code the
     /// user asked to join from.
     case joinLink(link: String)
-    /// An image of `size` bytes, whose SHA-256 is `digest`, follows.
-    case updateBegin(size: UInt32, digest: Digest)
+    /// An image of `size` bytes, whose SHA-256 is `digest`, follows. `signature` is the image's
+    /// (`ImageSignature`), 64 bytes, or empty for none, sent to a node of version 13 or later; nil
+    /// to one before, whose `UPDATE_BEGIN` ends at `digest`.
+    case updateBegin(size: UInt32, digest: Digest, signature: [UInt8]? = nil)
     /// The image's bytes from `offset`: `Companion.updateChunk` of them, all but the last.
     case updateData(offset: UInt32, data: [UInt8])
     /// Run the image. Never sent again once given up on: the node may be restarting into it.
@@ -611,6 +619,10 @@ public enum Body: Equatable, Sendable {
     /// Restart into the bootloader, which takes the image by its own protocol. Never sent again
     /// once given up on: the node may be restarting into it.
     case updateBootloader
+    /// Erase the node: its identity, sessions, contacts, groups, messages, settings and Bluetooth
+    /// bonds, after which it starts again as a new node with a new address. Answered `OK` first.
+    /// Only ever at the user's asking, after saying what goes (version 13).
+    case wipe
     /// The client's position: `lat` and `lon` in 10^-7 degree, WGS 84; `altitude` in metres, or
     /// `Position.noAltitude`; `accuracy` in metres, 0 for none; `age` in seconds.
     case setPosition(lat: Int32, lon: Int32, altitude: Int16, accuracy: UInt16, age: UInt16)
@@ -698,6 +710,7 @@ public enum Body: Equatable, Sendable {
         case .share: 0x34
         case .shareGroup: 0x35
         case .updateBootloader: 0x36
+        case .wipe: 0x37
         case .ok: 0x40
         case .error: 0x41
         case .info: 0x42
@@ -759,6 +772,7 @@ public enum Body: Equatable, Sendable {
         case .share: "SHARE"
         case .shareGroup: "SHARE_GROUP"
         case .updateBootloader: "UPDATE_BOOTLOADER"
+        case .wipe: "WIPE"
         case .ok: "OK"
         case .error: "ERROR"
         case .info: "INFO"

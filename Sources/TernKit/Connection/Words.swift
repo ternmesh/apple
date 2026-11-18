@@ -57,7 +57,7 @@ public enum Words {
         case ErrorCode.notNow: "The node is busy. Try again in a moment."
         case ErrorCode.notHeld: "The node does not hold that group or invite."
         case ErrorCode.notThere: "The node is not where the update was."
-        case ErrorCode.notAnImage: "That is not firmware this node runs."
+        case ErrorCode.notAnImage: "That is not firmware this node runs, or it is not signed by a key this node trusts."
         case ErrorCode.notAContact: "That address is not one of the node's contacts."
         default: "The node refused (\(code))."
         }
@@ -72,6 +72,8 @@ public enum Words {
             "This node can't be updated over Bluetooth. Flash it once over USB at ternmesh.org/flash."
         case .refused(ErrorCode.notAnImage):
             "The node refused the image: it is not firmware this node runs. It discarded it, and runs what it ran before."
+        case .untrusted:
+            "The node refused the image: it is not signed by a key this node trusts. Nothing was sent, and the node runs what it ran before."
         case let .refused(code): error(code)
         case .confused: "The node answered something the update did not expect."
         case .cancelled: "Update cancelled."
@@ -81,6 +83,49 @@ public enum Words {
     /// A node a client cannot update: flashed over USB, from the site's flash page.
     public static let updateOverUSB =
         "This node can't be updated over Bluetooth. Update it over USB at ternmesh.org/flash."
+
+    /// What is known of who made an image, said before it is sent, nil when it is a release's.
+    public static func signature(_ check: ImageSignature.Check) -> String? {
+        switch check {
+        case .verified: nil
+        case .notVerified:
+            "This firmware's signature does not match a Tern release key this app holds. It may not be "
+                + "the release's: someone may have changed it. Install it only if you know where it came from."
+        case .unsigned:
+            "This firmware is not signed: it was published before Tern's releases were signed. The app "
+                + "cannot tell that it is the release's. Install it only if you trust where it came from."
+        }
+    }
+
+    /// Why an image that is not signed is not offered to a node that checks signatures.
+    public static let unsignedToCheckingNode =
+        "This node takes only firmware signed by a Tern release key, and this release was published "
+        + "before releases were signed, so the node would refuse it. Update it over USB at ternmesh.org/flash, "
+        + "or wait for a signed release."
+
+    /// Said before an update by the bootloader, which checks no signature.
+    public static let bootloaderWindow =
+        "While the node waits in its bootloader, anyone in Bluetooth range can install firmware on it, "
+        + "until the update finishes. The app sends the firmware as soon as the bootloader appears."
+
+    /// When pairing with a node fails: a node takes a passkey it does not show on a screen only for
+    /// three minutes after someone has been at it.
+    public static let pairingWindow =
+        "Pairing failed. Press the node's button, or turn it off and on (on a board with no button, "
+        + "press RESET), then pair within 3 minutes. If the node shows a PIN on its screen, type that one."
+
+    /// What `WIPE` does, said before the user confirms it.
+    public static let wipeWarning =
+        "This erases the node for good: its address, contacts, groups, messages, settings and Bluetooth "
+        + "pairings. It starts again as a new node with a new address, and must be paired again. "
+        + "No one can undo this, and the people who have this node as a contact will no longer reach it."
+
+    /// What to do once the node has wiped itself: the operating system keeps its bond, which an
+    /// app cannot remove.
+    public static let wipeForgetBond =
+        "The node has been erased, and the app has forgotten it. Remove it from Bluetooth too: in "
+        + "Settings, Bluetooth (System Settings on a Mac), choose the node and Forget This Device. "
+        + "Then connect to it again as a new node."
 
     /// How long an update by the bootloader takes, said before it starts.
     public static let bootloaderUpdateTakes =

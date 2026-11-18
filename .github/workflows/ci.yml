@@ -12,13 +12,15 @@ permissions:
   contents: read
 
 jobs:
-  # TernKit uses only the standard library, so it is tested on Linux, which is quick, and on a
-  # Mac, which is what it ships on.
+  # TernKit uses only the standard library and libsodium, so it is tested on Linux, which is
+  # quick, and on a Mac, which is what it ships on. On Linux, swift-sodium links the system's
+  # libsodium; on a Mac it brings its own.
   linux:
     runs-on: ubuntu-24.04
     container: swift:6.1
     steps:
       - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y libsodium-dev pkg-config
       - run: swift test
 
   macos:
@@ -70,4 +72,9 @@ jobs:
             echo "::warning::Tests/TernKitTests/vectors/groups.json differs from the specification's. Copy the new file in the pull request that changes the code to match."
           fi
           cp spec/vectors/groups.json Tests/TernKitTests/vectors/groups.json
+          if ! cmp -s spec/vectors/routing.json Tests/TernKitTests/vectors/routing.json; then
+            echo "::warning::Tests/TernKitTests/vectors/routing.json differs from the specification's. Copy the new file in the pull request that changes the code to match."
+          fi
+          cp spec/vectors/routing.json Tests/TernKitTests/vectors/routing.json
+      - run: apt-get update && apt-get install -y libsodium-dev pkg-config
       - run: swift test

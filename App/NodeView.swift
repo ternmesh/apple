@@ -1,7 +1,7 @@
 // The node itself, as a dashboard: its name, link, battery and airtime at the head, then a row for
 // each thing about it, each opening a screen of its own: its address to give others, the nodes it
 // hears, its radio, what it shows of itself, its pairing PIN, and its firmware; and, last,
-// switching to another node and turning it off. A setting changed here is shown once the node's
+// switching to another node, turning it off and erasing it. A setting changed here is shown once the node's
 // SELF says so, not before.
 
 import SwiftUI
@@ -17,6 +17,7 @@ struct NodeView: View {
     @State private var confirmingCards = false
     @State private var confirmingUpdate: FirmwareOffer?
     @State private var confirmingOff = false
+    @State private var confirmingWipe = false
     @State private var renaming = false
     @State private var label = ""
     /// The card of a neighbour the user is adding as a contact.
@@ -57,6 +58,7 @@ struct NodeView: View {
                     .foregroundStyle(Color.primary)
                 }
                 turnOff
+                erase
             }
             .formStyle(.grouped)
             .navigationTitle("Node")
@@ -598,6 +600,30 @@ struct NodeView: View {
         }
     }
 
+    /// Erasing the node, for a node of version 13 or later: only as the user asks, once told that
+    /// its address, contacts, groups and messages go for good, and that it must be paired again.
+    @ViewBuilder
+    private var erase: some View {
+        if model.speaksWipe && !model.turnedOff {
+            SwiftUI.Section {
+                Button("Erase This Node…", role: .destructive) { confirmingWipe = true }
+                    .confirmationDialog(
+                        "Erase \(model.nodeName ?? "the node") for good?", isPresented: $confirmingWipe,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Erase Everything on the Node", role: .destructive) { model.wipe() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text(Words.wipeWarning)
+                    }
+            } footer: {
+                Text("For a node you give away or no longer trust. Anyone who holds the node can read what it "
+                    + "keeps, so erase it before it leaves your hands.")
+            }
+            .disabled(!model.isReady)
+        }
+    }
+
     /// The nodes the node hears. Each is named, if it can be, by a contact's routing id, else by a
     /// card the node holds, as the claim it is, which offers to add them as a contact as People's Nearby
     /// does; one with neither stays a routing id.
@@ -730,13 +756,19 @@ struct NodeView: View {
             isPresented: Binding(get: { confirmingUpdate != nil }, set: { if !$0 { confirmingUpdate = nil } }),
             titleVisibility: .visible
         ) {
-            Button("Update") { model.update() }
+            if let check = confirmingUpdate?.check, check != .verified {
+                // Not known to be the release's: installed only if the user asks after being told.
+                Button("Install Anyway", role: .destructive) { model.update() }
+            } else {
+                Button("Update") { model.update() }
+            }
             Button("Not Now", role: .cancel) {}
         } message: {
+            let warning = confirmingUpdate.flatMap { Words.signature($0.check) }.map { $0 + "\n\n" } ?? ""
             if confirmingUpdate?.image.update == .bootloader {
-                Text("The node restarts into its bootloader, which takes the new firmware over Bluetooth. \(Words.bootloaderUpdateTakes) The node keeps its contacts, messages and settings.")
+                Text(warning + "The node restarts into its bootloader, which takes the new firmware over Bluetooth. \(Words.bootloaderUpdateTakes) The node keeps its contacts, messages and settings. \(Words.bootloaderWindow)")
             } else {
-                Text("It takes a few minutes. Keep the node near this device. If the link drops, the update goes on when the node is back. At the end the node restarts, and keeps its contacts, messages and settings.")
+                Text(warning + "It takes a few minutes. Keep the node near this device. If the link drops, the update goes on when the node is back. At the end the node restarts, and keeps its contacts, messages and settings.")
             }
         }
     }
@@ -753,6 +785,11 @@ struct NodeView: View {
                 Text("Checking ternmesh.org…").foregroundStyle(.secondary)
             }
         case let .found(offer):
+            if let warning = Words.signature(offer.check) {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(Color.warn)
+                    .font(.footnote)
+            }
             switch offer.comparison {
             case .newer:
                 LabeledContent("Available", value: offer.release)
@@ -807,7 +844,7 @@ struct NodeView: View {
                     Text(Words.bootloader(phase)).foregroundStyle(.secondary)
                 }
             }
-            Text(Words.bootloaderUpdateTakes).font(.footnote).foregroundStyle(.secondary)
+            Text(Words.bootloaderUpdateTakes + " " + Words.bootloaderWindow).font(.footnote).foregroundStyle(.secondary)
         case let .inBootloader(offer, why):
             Text(why).foregroundStyle(.secondary)
             // Not waiting for the node: it is in its bootloader, not connected as itself.

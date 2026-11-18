@@ -14,7 +14,7 @@ struct NearbySections: View {
 
     var body: some View {
         let cards = model.speaksCards ? model.cardsHeard : []
-        let carded = Set(cards.map(\.address.routingId))
+        let carded = Set(cards.map { model.records.routingId(of: $0.address) })
         let neighbours = model.records.neighbours
         let bare = neighbours.values.filter { !carded.contains($0.routingId) }.sorted { $0.heard < $1.heard }
 
@@ -28,7 +28,7 @@ struct NearbySections: View {
         }
         if !cards.isEmpty {
             SwiftUI.Section {
-                ForEach(cards) { c in row(c, heard: neighbours[c.address.routingId]) }
+                ForEach(cards) { c in row(c, heard: neighbours[model.records.routingId(of: c.address)]) }
             } header: {
                 Text("Showing a card")
             } footer: {
@@ -68,7 +68,7 @@ struct NearbySections: View {
     @ViewBuilder
     private func neighbourRow(_ n: Neighbour) -> some View {
         let name = model.routingNames[n.routingId]
-        let contact = model.records.contacts.keys.first { $0.routingId == n.routingId }
+        let contact = model.records.contact(routingId: n.routingId)
         let row = HStack(spacing: 12) {
             Avatar(name: name ?? "", key: contact?.description ?? Words.routingId(n.routingId), unknown: name == nil, size: 40)
             VStack(alignment: .leading, spacing: 2) {

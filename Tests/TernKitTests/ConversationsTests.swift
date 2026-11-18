@@ -125,7 +125,8 @@ final class ConversationsTests: XCTestCase {
 
     // MARK: Names for routing ids
 
-    /// routing.md's, from vectors/routing.json in ternmesh/spec.
+    /// The ids a node of version 13 or earlier gives, from the address itself: routing.md's, from
+    /// vectors/routing.json in ternmesh/spec before announces carried a blinded key (spec#60).
     func testRoutingIds() {
         let ids: [(String, UInt32)] = [
             (String(repeating: "00", count: 32), 289_929_253),
@@ -134,11 +135,11 @@ final class ConversationsTests: XCTestCase {
             ("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", 1_752_530_551),
         ]
         for (hex, id) in ids {
-            XCTAssertEqual(Address(hex: hex)!.routingId, id, hex)
+            XCTAssertEqual(Address(hex: hex)!.unblindedRoutingId, id, hex)
         }
         // The exchange in vectors/companion.json: a group message from the second address.
         let second = Address(hex: "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c")!
-        XCTAssertEqual(second.routingId, 4_029_751_709)
+        XCTAssertEqual(second.unblindedRoutingId, 4_029_751_709)
     }
 
     func testAContactNamesItsRoutingId() {
@@ -147,8 +148,8 @@ final class ConversationsTests: XCTestCase {
             .contact(Contact(address: Self.carol, session: 0, name: "")),
         ])
         let names = r.routingNames
-        XCTAssertEqual(names, [Self.bob.routingId: "Bob", Self.carol.routingId: "cacacaca…"])
-        XCTAssertEqual(Words.sender(Self.bob.routingId, names: names), "Bob (claimed)", "a name is what the writer claimed")
+        XCTAssertEqual(names, [Self.bob.unblindedRoutingId: "Bob", Self.carol.unblindedRoutingId: "cacacaca…"])
+        XCTAssertEqual(Words.sender(Self.bob.unblindedRoutingId, names: names), "Bob (claimed)", "a name is what the writer claimed")
         XCTAssertEqual(Words.sender(0x0A0B_0C0D, names: names), "0a0b0c0d", "an id no contact has stays an id")
         XCTAssertEqual(Words.sender(0, names: names), "You")
     }
@@ -167,11 +168,11 @@ final class ConversationsTests: XCTestCase {
             .card(Card(address: dan, heard: 90, name: "")),
         ])
         let cards = r.routingCards
-        XCTAssertEqual(cards.keys.sorted(), [Self.carol.routingId, dan.routingId].sorted())
-        XCTAssertEqual(cards[Self.carol.routingId]?.name, "Carol")
-        XCTAssertEqual(cards[dan.routingId]?.address, dan, "a card with no name still has its address")
-        XCTAssertNil(cards[Self.bob.routingId], "a contact's own name comes before their card's")
-        XCTAssertEqual(r.routingNames[Self.bob.routingId], "Bob")
+        XCTAssertEqual(cards.keys.sorted(), [Self.carol.unblindedRoutingId, dan.unblindedRoutingId].sorted())
+        XCTAssertEqual(cards[Self.carol.unblindedRoutingId]?.name, "Carol")
+        XCTAssertEqual(cards[dan.unblindedRoutingId]?.address, dan, "a card with no name still has its address")
+        XCTAssertNil(cards[Self.bob.unblindedRoutingId], "a contact's own name comes before their card's")
+        XCTAssertEqual(r.routingNames[Self.bob.unblindedRoutingId], "Bob")
     }
 
     func testARoutingIdTwoCardsShareNamesNeither() {

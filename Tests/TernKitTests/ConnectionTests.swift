@@ -123,7 +123,8 @@ final class ConnectionTests: XCTestCase {
             XCTAssertEqual(link.connection.board, version >= 4 ? "heltec-v3" : nil)
 
             var result: Result<Body, RequestFailure>?
-            let request = try Frame.decode(frames[frames.count - 2]["frame"]!.bytes).body
+            // A client of version 3 sends no signature: its UPDATE_BEGIN is version 12's.
+            let request = try Frame.decode(frames[frames.count - 2]["frame"]!.bytes, version: 12).body
             link.connection.submit(request) { result = $0 }
             XCTAssertEqual(result, .failure(.unsupported), "\(version)")
             XCTAssertEqual(link.out, [])
@@ -216,6 +217,78 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(second.connection.board, "")
         XCTAssertNil(second.connection.update)
         XCTAssertEqual(second.connection.updateMethod, .none)
+    }
+
+    /// `WIPE`, as in the specification's `wipe`: each frame reads and builds back, and a
+    /// connection of this version sends it and takes the node's `OK`. (The vector's client sends
+    /// it straight after `HELLO`; this connection syncs first, so its seq differs.)
+    func testWipe() throws {
+        let frames = v["wipe"]!.array
+        XCTAssertEqual(frames.map { $0["type"]!.string }, ["HELLO", "INFO", "WIPE", "OK"])
+        for f in frames {
+            XCTAssertEqual(Hex.encode(try Frame.decode(f["frame"]!.bytes).encode()), f["frame"]!.string)
+        }
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        var result: Result<Body, RequestFailure>?
+        node.connection.submit(.wipe) { result = $0 }
+        XCTAssertEqual(node.answerOne(), .wipe)
+        XCTAssertEqual(result, .success(.ok))
+        XCTAssertEqual(Body.wipe.since, 13)
+        XCTAssertEqual(try Frame(seq: 4, body: .wipe).encode(), [0x37, 4])
+    }
+
+    /// A client of version 12 sends `UPDATE_BEGIN` with no signature, which a node of version 13
+    /// refuses with 11, and does not send `WIPE`, which its version does not define.
+    func testOlderVersion12() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 12 }!
+        let frames = older["frames"]!.array
+        XCTAssertEqual(frames[frames.count - 2]["type"]!.string, "WIPE")
+        let link = Link(Connection(version: 12, now: { 0 }, wallTime: nil))
+        let answers = link.replay(Array(frames.dropLast(2)))
+        XCTAssertEqual(answers, [.failure(.refused(code: ErrorCode.notAnImage))])
+        XCTAssertEqual(link.connection.agreed, 12)
+        var result: Result<Body, RequestFailure>?
+        link.connection.submit(.wipe) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(link.out, [])
+    }
+
+    /// The client says version 14 in `HELLO`, and speaks the lesser of it and the node's.
+    func testHelloSaysFourteen() throws {
+        XCTAssertEqual(Companion.version, 14)
+        for nodeVersion: UInt8 in [11, 12, 13, 14, 15] {
+            let node = Node()
+            node.version = nodeVersion
+            node.connection.open()
+            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 14))
+            node.answerAll()
+            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 14))
+        }
+    }
+
+    /// `UPDATE_BEGIN`'s signature goes only to a node of version 13 or later; to one of 13 a
+    /// missing signature is sent as an empty one, which says there is none.
+    func testUpdateBeginIsSentAsTheVersionSpokenHasIt() throws {
+        let digest = Digest([UInt8](repeating: 7, count: 32))!
+        let signature = [UInt8](repeating: 9, count: 64)
+        let signed = Body.updateBegin(size: 10, digest: digest, signature: signature)
+        XCTAssertEqual(Connection.asSpoken(signed, 12), .updateBegin(size: 10, digest: digest))
+        XCTAssertEqual(Connection.asSpoken(signed, 13), signed)
+        XCTAssertEqual(Connection.asSpoken(.updateBegin(size: 10, digest: digest), 14), .updateBegin(size: 10, digest: digest, signature: []))
+        XCTAssertEqual(try Frame(seq: 1, body: Connection.asSpoken(signed, 12)).encode().count, 38)
+        XCTAssertEqual(try Frame(seq: 1, body: signed).encode().count, 103)
+        XCTAssertEqual(try Frame(seq: 1, body: Connection.asSpoken(.updateBegin(size: 10, digest: digest), 13)).encode().count, 39)
+        XCTAssertThrowsError(try Frame(seq: 1, body: .updateBegin(size: 10, digest: digest, signature: signature + [0])).encode())
+        for (nodeVersion, length) in [(UInt8(12), 38), (13, 103), (14, 103)] {
+            let node = Node()
+            node.version = nodeVersion
+            node.connection.open()
+            node.answerAll()
+            node.connection.submit(signed)
+            XCTAssertEqual(node.sent.last?.count, length, "\(nodeVersion)")
+        }
     }
 
     /// A client of the latest version talking to a node of version 11 reads its `INFO`, which has
@@ -973,8 +1046,13 @@ private final class Link {
     ) -> [Result<Body, RequestFailure>] {
         var answers: [Result<Body, RequestFailure>] = []
         connection.open()
+        // Each request as its client's version has it: a client of version 12 or earlier sends
+        // `UPDATE_BEGIN` without a signature.
+        let speak = frames.lazy.compactMap { f -> UInt8? in
+            if case let .hello(v)? = try? Frame.decode(f["frame"]!.bytes).body { v } else { nil }
+        }.first ?? Companion.version
         for f in frames where f["from"]!.string == "client" {
-            let body = try! Frame.decode(f["frame"]!.bytes).body
+            let body = try! Frame.decode(f["frame"]!.bytes, version: speak).body
             switch body {
             case .hello, .sync, .setTime: continue
             default: connection.submit(body) { answers.append($0) }

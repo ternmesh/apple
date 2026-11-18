@@ -1,6 +1,6 @@
 // SHA-256, as FIPS 180-4 defines it: the short code's hash, what UPDATE_BEGIN's digest is, and
-// what a client checks a downloaded image against. Here rather than CryptoKit's so that TernKit keeps to the standard
-// library and its tests run on Linux. It is a checksum here, not a secret: nothing about it needs
+// what a client checks a downloaded image against. Here rather than CryptoKit's so that TernKit
+// needs nothing of Apple's and its tests run on Linux. It is a checksum here, not a secret: nothing about it needs
 // to run in constant time.
 
 public struct SHA256 {
