@@ -203,6 +203,25 @@ final class ConversationsTests: XCTestCase {
         XCTAssertEqual(r.readThrough(seen: [bob: 2, carol: 1]), 2, "Bob's 3 came after he was seen")
     }
 
+    func testSleepWords() {
+        let keeper: UInt32 = 0x1D2E_3F40
+        XCTAssertEqual(Words.sleep(Sleep(wake: 0, listen: 2, state: Sleep.awake, keeper: 0, retry: 0)), "Awake")
+        XCTAssertEqual(
+            Words.sleep(Sleep(wake: 600, listen: 4, state: Sleep.asleep, keeper: keeper, retry: 0)),
+            "Asleep — kept by 1d2e3f40")
+        XCTAssertEqual(
+            Words.sleep(Sleep(wake: 600, listen: 4, state: Sleep.asleep, keeper: keeper, retry: 0), names: [keeper: "Hut"]),
+            "Asleep — kept by Hut")
+        XCTAssertEqual(
+            Words.sleep(Sleep(wake: 600, listen: 2, state: Sleep.waiting, keeper: 0, retry: 0)),
+            "Waiting for a relay to keep its messages")
+        XCTAssertEqual(
+            Words.sleep(Sleep(wake: 3600, listen: 2, state: Sleep.resting, keeper: 0xD82C_1E1A, retry: 3581)),
+            "No relay answers; trying d82c1e1a again in 59 min")
+        XCTAssertEqual(Words.wakes(900), "Sleeps, wakes every 15 min")
+        XCTAssertEqual(Words.heldUntilWake(600), "Held by its relay until it wakes, within 10 min")
+    }
+
     func testWords() {
         XCTAssertEqual(Words.waiting(reason: 0, wait: 0), "Waiting")
         XCTAssertEqual(Words.waiting(reason: 1, wait: 0), "Waiting: looking for a route")

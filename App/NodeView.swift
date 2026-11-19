@@ -15,6 +15,7 @@ struct NodeView: View {
     @State private var ownPasskey = ""
     @State private var cardName = ""
     @State private var confirmingCards = false
+    @State private var confirmingSleep = false
     @State private var confirmingUpdate: FirmwareOffer?
     @State private var confirmingOff = false
     @State private var confirmingWipe = false
@@ -247,6 +248,15 @@ struct NodeView: View {
                         title: "Radio", symbol: "dot.radiowaves.left.and.right", tint: Color(hex: 0x0B4F6C),
                         value: "\(me.region.isEmpty ? "Not set" : me.region) · \(Words.role(me.role))",
                         valueColor: me.region.isEmpty ? .red : .secondary)
+                }
+            }
+            if let sleep = model.sleep {
+                NavigationLink {
+                    page("Sleep") { sleeping }
+                } label: {
+                    SettingRow(
+                        title: "Sleep", symbol: "moon.zzz", tint: Color(hex: 0x4338CA),
+                        value: sleep.wake == 0 ? "Off" : "Every \(Words.duration(UInt32(sleep.wake)))")
                 }
             }
             if hasPrivacy {
@@ -543,6 +553,62 @@ struct NodeView: View {
                     + "under People, Nearby, either way.")
             }
             .disabled(!model.isConnected)
+        }
+    }
+
+    /// The wakes a user picks from, in seconds: from WAKE_MIN to WAKE_MAX.
+    static let wakes: [UInt16] = [300, 600, 900, 1800, 3600]
+
+    /// Sleeping, for a node of version 15 or later: on or off, how often it wakes, how long it
+    /// listens, and what it does now. Only as the user asks, once told what it costs.
+    @ViewBuilder
+    private var sleeping: some View {
+        if let s = model.sleep, let me = model.records.me {
+            SwiftUI.Section {
+                Toggle("Sleep between check-ins", isOn: Binding(
+                    get: { s.wake != 0 },
+                    set: { on in
+                        if on { confirmingSleep = true } else { model.set(.wake(0)) }
+                    }))
+                if s.wake != 0 {
+                    Picker("Wake at least every", selection: Binding(
+                        get: { s.wake }, set: { model.set(.wake($0)) })) {
+                        if !Self.wakes.contains(s.wake) {
+                            Text(Words.duration(UInt32(s.wake))).tag(s.wake)
+                        }
+                        ForEach(Self.wakes, id: \.self) { Text(Words.duration(UInt32($0))).tag($0) }
+                    }
+                }
+                Text(Words.sleep(s, names: model.routingNames)).foregroundStyle(.secondary)
+            } header: {
+                Text("Sleep")
+            } footer: {
+                Text(me.role == 1 ? Words.relaysNeverSleep : Words.sleepTradeoff)
+            }
+            .disabled(!model.isConnected)
+            .confirmationDialog("Let the node sleep?", isPresented: $confirmingSleep, titleVisibility: .visible) {
+                ForEach(Self.wakes, id: \.self) { w in
+                    Button("Wake every \(Words.duration(UInt32(w)))") { model.set(.wake(w)) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(Words.sleepTradeoff)
+            }
+
+            if s.wake != 0 {
+                SwiftUI.Section {
+                    Stepper("Listen \(s.listen) s after each check-in", value: Binding(
+                        get: { Int(s.listen) },
+                        set: { model.set(.listen(UInt8(clamping: $0))) }),
+                        in: Int(Sleep.listenMin)...30)
+                        .monospacedDigit()
+                } header: {
+                    Text("Advanced")
+                } footer: {
+                    Text("Longer gives its relay more time to hand over what it holds, and uses a little more battery.")
+                }
+                .disabled(!model.isConnected)
+            }
         }
     }
 

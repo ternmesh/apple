@@ -47,6 +47,8 @@ extension Frame {
             case let .cards(on): w.u8(on)
             case let .cardName(name): try w.str(name, limit: Companion.cardNameMax, field: "card name")
             case let .receiver(on): w.u8(on)
+            case let .wake(seconds): w.u16(seconds)
+            case let .listen(seconds): w.u8(seconds)
             }
         case let .send(ref, to, text):
             w.u32(ref)
@@ -136,6 +138,7 @@ extension Frame {
             w.addr(c.address)
             w.u8(c.session)
             try w.str(c.name, limit: Companion.nameMax, field: "name")
+            if let wake = c.wake { w.u16(wake) }
         case let .message(m):
             w.u32(m.id)
             w.addr(m.contact)
@@ -205,6 +208,12 @@ extension Frame {
             w.u16(f.accuracy)
             w.u32(f.age)
             w.u8(f.satellites)
+        case let .sleep(s):
+            w.u16(s.wake)
+            w.u8(s.listen)
+            w.u8(s.state)
+            w.u32(s.keeper)
+            w.u16(s.retry)
         }
         guard w.bytes.count <= Companion.maxFrame else { throw EncodeError.frameTooLong(w.bytes.count) }
         return w.bytes
@@ -244,6 +253,8 @@ extension Frame {
             case 5: body = .set(.cards(try r.u8()))
             case 6: body = .set(.cardName(try r.str(limit: Companion.cardNameMax)))
             case 7: body = .set(.receiver(try r.u8()))
+            case 8: body = .set(.wake(try r.u16()))
+            case 9: body = .set(.listen(try r.u8()))
             default: throw DecodeError.undefined
             }
         case 0x06: body = .off
@@ -312,7 +323,10 @@ extension Frame {
             if version >= 11 { me.pairing = try r.u8() }
             body = .nodeSelf(me)
         case 0x81:
-            body = .contact(Contact(address: try r.addr(), session: try r.u8(), name: try r.str(limit: Companion.nameMax)))
+            var c = Contact(address: try r.addr(), session: try r.u8(), name: try r.str(limit: Companion.nameMax))
+            // A client of version 14 or earlier is sent a `CONTACT` without `wake`.
+            if version >= 15 { c.wake = try r.u16() }
+            body = .contact(c)
         case 0x82: body = .contactGone(address: try r.addr())
         case 0x83:
             body = .message(Message(
@@ -349,6 +363,9 @@ extension Frame {
                 receiver: try r.u8(), source: try r.u8(), lat: try r.i32(), lon: try r.i32(), altitude: try r.i16(),
                 accuracy: try r.u16(), age: try r.u32(), satellites: try r.u8()
             ))
+        case 0x95:
+            body = .sleep(Sleep(
+                wake: try r.u16(), listen: try r.u8(), state: try r.u8(), keeper: try r.u32(), retry: try r.u16()))
         default: throw DecodeError.undefined
         }
         return Frame(seq: bytes[1], body: body)

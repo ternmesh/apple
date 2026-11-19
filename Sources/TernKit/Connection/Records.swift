@@ -99,6 +99,8 @@ public struct Records: Equatable, Sendable {
     public var power: Power?
     /// The node's own fix and its satellite receiver; nil before a node of version 8 has said.
     public var fix: NodeFix?
+    /// Whether the node sleeps, and how; nil before a node of version 15 has said.
+    public var sleep: Sleep?
     /// The version both ends spoke at the last sync that finished, nil if none has. A node may
     /// hold records a client of an earlier version was never sent, under `id`s below ones it was.
     public var syncedVersion: UInt8?
@@ -127,7 +129,7 @@ public struct Records: Equatable, Sendable {
         a.me == b.me && a.contacts == b.contacts && a.groups == b.groups && a.items == b.items
             && a.neighbours == b.neighbours && a.positions == b.positions && a.groupPositions == b.groupPositions
             && a.sharing == b.sharing && a.groupSharing == b.groupSharing && a.cards == b.cards
-            && a.airtime == b.airtime && a.power == b.power && a.fix == b.fix
+            && a.airtime == b.airtime && a.power == b.power && a.fix == b.fix && a.sleep == b.sleep
             && a.syncedVersion == b.syncedVersion && a.missedSince == b.missedSince
     }
 
@@ -192,6 +194,8 @@ public struct Records: Equatable, Sendable {
             power = p
         case let .fix(f):
             fix = f
+        case let .sleep(s):
+            sleep = s
         default:
             break
         }
@@ -238,6 +242,8 @@ public struct Records: Equatable, Sendable {
         if version >= 6 { cards = cards.filter { seen.cards.contains($0.key) } }
         // A node of version 7 or earlier tells no fix: one held is from before it was.
         if version < 8 { fix = nil }
+        // Nor one of version 14 or earlier its sleeping.
+        if version < 15 { sleep = nil }
         syncedVersion = version
         missedSince = nil
         syncing = nil

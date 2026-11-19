@@ -14,9 +14,11 @@
 // A SELF from a node of version 5 or earlier, or one a client of version 5 wrote, ends before
 // `cards` and `card_name`: it is read as version 5's, and says nothing of cards. One of version 6
 // to 9 ends before `most`: it is read as version 9's, and says nothing of the most. One of
-// version 10 ends before `pairing`: it is read as version 10's, and says nothing of pairing.
+// version 10 ends before `pairing`: it is read as version 10's, and says nothing of pairing. A
+// CONTACT from before version 15 ends before `wake`: it is read as version 14's, and says nothing
+// of whether the contact sleeps.
 //
-// Positions, sharing, cards and the node's own fix are not kept. A position's or a fix's age,
+// Positions, sharing, cards, the node's own fix and its sleeping are not kept. A position's or a fix's age,
 // sharing's minutes left and how long ago a card was heard are as of when the record was sent, so
 // on disk they only grow wrong, and every sync sends each whole again. A file that holds them all the same is read, and they are
 // passed over.
@@ -92,12 +94,14 @@ extension Records {
 }
 
 extension Records {
-    /// One of the file's frames. `SELF` is the one record later versions made longer, so one
-    /// that does not read as this version's is read as the version before `pairing`, then as the
-    /// version before `most`, and then as the version before cards: each reads a longer one too,
-    /// and would drop what it does not know.
+    /// One of the file's frames. `SELF` and `CONTACT` are the records later versions made longer,
+    /// so a `CONTACT` that does not read as this version's is read as the version before `wake`,
+    /// and a `SELF` as the version before `pairing`, then as the version before `most`, and then
+    /// as the version before cards: each reads a longer one too, and would drop what it does not
+    /// know.
     static func kept(_ frame: [UInt8]) -> Frame? {
         if let read = try? Frame.decode(frame) { return read }
+        if frame.first == 0x81 { return try? Frame.decode(frame, version: 14) }
         guard frame.first == 0x80 else { return nil }
         return (try? Frame.decode(frame, version: 10)) ?? (try? Frame.decode(frame, version: 9))
             ?? (try? Frame.decode(frame, version: 5))
@@ -116,7 +120,7 @@ extension Body {
     /// A record whose numbers count on from when it was sent: one the file does not keep.
     var isFleeting: Bool {
         switch self {
-        case .position, .groupPosition, .sharing, .groupSharing, .card, .fix: true
+        case .position, .groupPosition, .sharing, .groupSharing, .card, .fix, .sleep: true
         default: false
         }
     }

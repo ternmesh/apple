@@ -20,13 +20,14 @@ final class ConnectionTests: XCTestCase {
         let link = Link(Connection(now: { 0 }, wallTime: { time }))
         let answers = link.replay(frames)
 
-        XCTAssertEqual(answers.count, 29)
-        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 25, "every request answered but four")
+        XCTAssertEqual(answers.count, 34)
+        XCTAssertEqual(answers.compactMap { try? $0.get() }.count, 28, "every request answered but six")
         XCTAssertEqual(answers.last, .success(.ok), "OFF is answered, before the node turns off")
         let refused = answers.indices.filter { answers[$0] == .failure(.refused(code: ErrorCode.refused)) }
         XCTAssertEqual(
-            refused, [12, 17, 22, 24],
-            "a precision past 24, cards neither on nor off, a join code whose check fails, and the receiver neither on nor off")
+            refused, [12, 17, 22, 24, 29, 31],
+            "a precision past 24, cards neither on nor off, a join code whose check fails, the receiver neither on nor off, "
+                + "a wake under WAKE_MIN and a listen under LISTEN_MIN")
         guard case let .link(shown) = try answers[20].get() else { return XCTFail("GROUP_LINK is answered with LINK") }
         XCTAssertEqual(JoinCode.read(shown), JoinCode(group: GroupID(hex: "c8eafadc0857a696")!, name: "Ridge walkers"))
         let r = link.connection.records
@@ -35,6 +36,9 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(r.me?.cardName, "Ada · hut warden", "the name is kept while they are off")
         XCTAssertEqual(r.me?.pairing, NodeSelf.pairingSet, "the user set their own passkey")
         XCTAssertEqual(r.syncedVersion, Companion.version)
+        XCTAssertEqual(r.me?.role, 0, "made a leaf, to sleep")
+        XCTAssertEqual(r.sleep, Sleep(wake: 600, listen: 4, state: Sleep.asleep, keeper: 0x1D2E_3F40, retry: 0))
+        XCTAssertEqual(r.contacts.values.map(\.wake), [0, 0, 0], "none of the contacts sleeps")
         XCTAssertEqual(r.contacts.values.map(\.name).sorted(), ["Bob", "Carol", "Dave (trail crew)"])
         XCTAssertEqual(r.contacts.values.map(\.session), [0, 0, 0], "Bob's session ended; the others never had one")
         // The card held from the start, and again when its sender was heard; then forgotten. Its
@@ -255,16 +259,16 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(link.out, [])
     }
 
-    /// The client says version 14 in `HELLO`, and speaks the lesser of it and the node's.
-    func testHelloSaysFourteen() throws {
-        XCTAssertEqual(Companion.version, 14)
-        for nodeVersion: UInt8 in [11, 12, 13, 14, 15] {
+    /// The client says version 15 in `HELLO`, and speaks the lesser of it and the node's.
+    func testHelloSaysFifteen() throws {
+        XCTAssertEqual(Companion.version, 15)
+        for nodeVersion: UInt8 in [11, 12, 13, 14, 15, 16] {
             let node = Node()
             node.version = nodeVersion
             node.connection.open()
-            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 14))
+            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 15))
             node.answerAll()
-            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 14))
+            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 15))
         }
     }
 
@@ -1105,6 +1109,13 @@ private final class Node {
     }()
 
     func news(_ body: Body) {
+        var body = body
+        // A CONTACT as a node of version 15 sends it: with `wake`, 0 for a contact that does not
+        // sleep.
+        if case var .contact(c) = body, c.wake == nil, min(version, connection.version) >= 15 {
+            c.wake = 0
+            body = .contact(c)
+        }
         connection.receive(try! Frame(seq: newsCount, body: body).encode())
         newsCount &+= 1
     }

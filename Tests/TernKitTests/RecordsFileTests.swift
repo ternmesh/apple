@@ -151,6 +151,20 @@ final class RecordsFileTests: XCTestCase {
         XCTAssertEqual(Records(decoding: r.encoded()).missedSince, 0)
     }
 
+    /// A node's sleeping is fleeting, as its fix is: `retry` counts down, and every sync sends it.
+    /// A CONTACT from before version 15, without `wake`, reads as version 14's.
+    func testSleepingIsNotKeptAndAContactWithoutWakeIsRead() throws {
+        let r = try held()
+        XCTAssertNotNil(r.sleep)
+        XCTAssertNil(Records(decoding: r.encoded()).sleep)
+        let bob = Address([UInt8](repeating: 0xB0, count: 32))!
+        let old = try Frame(seq: 0, body: .contact(Contact(address: bob, session: 1, name: "Bob"))).encode()
+        var empty = Records()
+        empty.syncedVersion = 14
+        let file = empty.encoded() + [UInt8(old.count)] + old
+        XCTAssertEqual(Records(decoding: file).contacts[bob], Contact(address: bob, session: 1, name: "Bob"))
+    }
+
     func testWhatWasMissedAndTheVersionAreKept() throws {
         var r = try held()
         r.syncedVersion = 2
@@ -216,6 +230,7 @@ private extension Records {
         r.groupSharing = [:]
         r.cards = [:]
         r.fix = nil
+        r.sleep = nil
         return r
     }
 }
