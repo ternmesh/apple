@@ -2,7 +2,8 @@
 // node holds" says. A record replaces the one before it; STATE changes a message in place; a sync
 // is the whole list of contacts, groups, neighbours, positions, sharing and cards, but not of
 // messages; and a sync of version 8 sends a FIX, which replaces the one before it as AIRTIME and
-// POWER do.
+// POWER do. FORGOTTEN and GROUP_FORGOTTEN take a conversation's items through an id away, at once,
+// in a sync or out of one: the node says so outright, so missed news does not stay it.
 
 /// A message, group message or invite: the three records that share the node's count of `id`s,
 /// and a message's states.
@@ -196,9 +197,21 @@ public struct Records: Equatable, Sendable {
             fix = f
         case let .sleep(s):
             sleep = s
+        case let .forgotten(contact, through):
+            forget(.contact(contact), through: through)
+        case let .groupForgotten(group, through):
+            forget(.group(group), through: through)
         default:
             break
         }
+    }
+
+    /// The user forgot the conversation with `peer` through `through`: every message and invite
+    /// with an address, or every group message to a group, whose `id` is `through` or less, held
+    /// in whatever state. An invite to a group sits with the address, so a group's forgetting
+    /// leaves it.
+    mutating func forget(_ peer: Peer, through: UInt32) {
+        items = items.filter { $0.key > through || $0.value.peer != peer }
     }
 
     /// The `after` to sync with. Normally the greatest `id` held. After missed news, one less than

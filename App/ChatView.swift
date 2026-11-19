@@ -1,6 +1,6 @@
 // One conversation: its messages and invites oldest first, what the user sent and where it is,
-// and the composer. What can be done with the contact or the group is in the toolbar, and a line
-// under the title says when the node shares the user's location with them.
+// and the composer. What can be done with the contact or the group is in the toolbar, deleting the
+// chat among it, and a line under the title says when the node shares the user's location with them.
 
 import SwiftUI
 import TernKit
@@ -8,11 +8,16 @@ import TernKit
 struct ChatView: View {
     let peer: Peer
     @EnvironmentObject private var model: NodeModel
+    @Environment(\.dismiss) private var dismiss
     @State private var draft = ""
     @State private var naming = false
     @State private var name = ""
     @State private var inviting = false
     @State private var leaving = false
+    /// The last item shown when the user asked to leave: as far as leaving and deleting the chat
+    /// deletes it.
+    @State private var leavingThrough: UInt32?
+    @State private var forgetting: ForgetRequest?
     @State private var ending = false
     @State private var sharingLocation = false
     @State private var showingCode = false
@@ -48,7 +53,7 @@ struct ChatView: View {
         }
         .navigationTitle(conversation.name)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) { menu }
+            ToolbarItem(placement: .primaryAction) { menu(conversation) }
         }
         .onAppear { model.visible = peer }
         .onDisappear { if model.visible == peer { model.visible = nil } }
@@ -71,9 +76,17 @@ struct ChatView: View {
             Button("Leave", role: .destructive) {
                 if case let .group(g) = peer { model.leaveGroup(g) }
             }
+            // A client that offers to forget while it leaves sends both, the forgetting first.
+            if case let .group(g) = peer, let through = leavingThrough {
+                Button("Leave and Delete Chat", role: .destructive) {
+                    model.forget(peer, through: through) { model.leaveGroup(g) }
+                }
+            }
         } message: {
-            Text("The node forgets the group's secret. Its messages are kept, and the others are not told. To be in it again, you need an invite or its join code.")
+            Text("The node forgets the group's secret. Its messages are kept, and the others are not told. To be in it again, you need an invite or its join code."
+                + (leavingThrough == nil ? "" : " Leave and Delete Chat also erases its messages from your node, and from every phone or computer connected to it. This can't be undone."))
         }
+        .forgetsChat($forgetting) { dismiss() }
         .confirmationDialog("End the session?", isPresented: $ending, titleVisibility: .visible) {
             Button("End Session", role: .destructive) {
                 if case let .contact(a) = peer { model.endSession(a) }
@@ -193,16 +206,24 @@ struct ChatView: View {
     // MARK: Toolbar
 
     @ViewBuilder
-    private var menu: some View {
+    private func menu(_ conversation: Conversation) -> some View {
         switch peer {
         case let .contact(address):
-            contactMenu(address, model.records.contacts[address])
+            contactMenu(address, model.records.contacts[address], conversation)
         case let .group(group):
-            groupMenu(group)
+            groupMenu(group, conversation)
         }
     }
 
-    private func contactMenu(_ address: Address, _ contact: Contact?) -> some View {
+    /// Delete Chat, where the node can forget the conversation and there is something in it.
+    @ViewBuilder
+    private func forgetButton(_ conversation: Conversation) -> some View {
+        if model.canForget(conversation) {
+            Button("Delete Chat", role: .destructive) { forgetting = ForgetRequest(conversation) }
+        }
+    }
+
+    private func contactMenu(_ address: Address, _ contact: Contact?, _ conversation: Conversation) -> some View {
         Menu {
             Button(contact == nil ? "Save as Contact" : "Rename Contact") {
                 name = contact?.name ?? ""
@@ -216,6 +237,7 @@ struct ChatView: View {
             if (model.agreed ?? 0) >= 1 {
                 Button("End Session", role: .destructive) { ending = true }
             }
+            forgetButton(conversation)
             if let contact {
                 Text(contact.session == 1 ? "Session: yes" : "Session: no")
             }
@@ -225,26 +247,34 @@ struct ChatView: View {
         .disabled(!model.isConnected)
     }
 
-    private func groupMenu(_ group: GroupID) -> some View {
-        Menu {
-            Button("Rename Group") {
-                name = model.records.groups[group]?.name ?? ""
-                naming = true
+    private func groupMenu(_ group: GroupID, _ conversation: Conversation) -> some View {
+        let held = model.records.groups[group] != nil
+        return Menu {
+            // Only while the node holds the group: a left group's conversation stays, and can be
+            // deleted.
+            if held {
+                Button("Rename Group") {
+                    name = model.records.groups[group]?.name ?? ""
+                    naming = true
+                }
+                Button("Invite a Contact") { inviting = true }
+                    .disabled(model.records.contacts.isEmpty)
+                if model.speaksJoinCodes {
+                    Button("Join Code…") { showingCode = true }
+                }
+                if model.speaksPositions {
+                    Button("Share My Location…") { sharingLocation = true }
+                }
+                Button("Leave Group", role: .destructive) {
+                    leavingThrough = model.canForget(conversation) ? conversation.last?.id : nil
+                    leaving = true
+                }
             }
-            Button("Invite a Contact") { inviting = true }
-                .disabled(model.records.contacts.isEmpty)
-            if model.speaksJoinCodes {
-                Button("Join Code…") { showingCode = true }
-            }
-            // Only while the node holds the group: a left group's conversation stays.
-            if model.speaksPositions, model.records.groups[group] != nil {
-                Button("Share My Location…") { sharingLocation = true }
-            }
-            Button("Leave Group", role: .destructive) { leaving = true }
+            forgetButton(conversation)
         } label: {
             Label("Group", systemImage: "ellipsis.circle")
         }
-        .disabled(!model.isConnected || model.records.groups[group] == nil)
+        .disabled(!model.isConnected || !(held || model.canForget(conversation)))
     }
 
     private var title: String {
@@ -277,6 +307,61 @@ struct ChatView: View {
             }
         }
         .frame(minWidth: 320, minHeight: 320)
+    }
+}
+
+// MARK: Deleting a chat
+
+/// A chat the user asked to delete, as it was shown when they asked: it is deleted as far as the
+/// last item they saw, and a message that arrives while they decide is kept.
+struct ForgetRequest: Identifiable {
+    var peer: Peer
+    var name: String
+    var through: UInt32
+    /// Whether any of it is still to be sent, which deleting it gives up.
+    var unsent: Bool
+
+    var id: Peer { peer }
+
+    init?(_ conversation: Conversation) {
+        guard let last = conversation.last else { return nil }
+        peer = conversation.peer
+        name = conversation.name
+        through = last.id
+        unsent = conversation.hasUnsent
+    }
+
+    var isGroup: Bool {
+        if case .group = peer { return true }
+        return false
+    }
+}
+
+extension View {
+    /// Asks before deleting the chat `request` names, from the node and every client of it, for
+    /// good, and says what goes with it. `done` runs once the node has deleted it.
+    func forgetsChat(_ request: Binding<ForgetRequest?>, done: @escaping () -> Void = {}) -> some View {
+        modifier(ForgetDialog(request: request, done: done))
+    }
+}
+
+private struct ForgetDialog: ViewModifier {
+    @EnvironmentObject private var model: NodeModel
+    @Binding var request: ForgetRequest?
+    let done: () -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            request.map { Words.forgetTitle($0.name) } ?? "",
+            isPresented: Binding(get: { request != nil }, set: { if !$0 { request = nil } }),
+            titleVisibility: .visible,
+            presenting: request
+        ) { r in
+            Button("Delete Chat", role: .destructive) { model.forget(r.peer, through: r.through, then: done) }
+            Button("Cancel", role: .cancel) {}
+        } message: { r in
+            Text(Words.forgetWarning(group: r.isGroup, unsent: r.unsent))
+        }
     }
 }
 

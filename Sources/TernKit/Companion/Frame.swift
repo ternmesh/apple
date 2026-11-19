@@ -1,12 +1,13 @@
-// The companion protocol's frames, version 15: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 16: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 14 is this without sleeping (the settings 8 and 9,
-    /// the news `SLEEP`, and `CONTACT`'s `wake`). Version 13 is this with routing ids made from the address
+    /// The version this client speaks. Version 15 is this without forgetting (the requests
+    /// `FORGET` and `FORGET_GROUP`, and the news `FORGOTTEN` and `GROUP_FORGOTTEN`). Version 14 is
+    /// version 15 without sleeping (the settings 8 and 9, the news `SLEEP`, and `CONTACT`'s `wake`). Version 13 is this with routing ids made from the address
     /// itself, not from a key blinded from it (RoutingNames.swift); its frames are the same.
     /// Version 12 is version 13 without signed images and wiping (`UPDATE_BEGIN`'s `signature`
     /// and the request `WIPE`). Version 11 is version 12 without updates by the bootloader (the
@@ -22,7 +23,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 15
+    public static let version: UInt8 = 16
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -38,6 +39,7 @@ public enum Companion {
         case 0x36: 12
         case 0x37: 13
         case 0x95: 15
+        case 0x12, 0x28, 0x96...0x97: 16
         default: 0
         }
     }
@@ -76,6 +78,8 @@ public enum Companion {
     public static let gap = 0.5
     /// How many of its last messages a node matches a `SEND`'s `ref` against.
     public static let refs = 16
+    /// The fewest `FORGOTTEN` and `GROUP_FORGOTTEN` records a node keeps (version 16).
+    public static let forgottenKept = 16
     /// The least time between two `ASKED`s for one address, or two of `NEIGHBOUR`, `AIRTIME` or
     /// `POWER`, or two `FIX`es for a fix that moved, in seconds.
     public static let quiet = 10.0
@@ -633,7 +637,7 @@ public struct NodeFix: Equatable, Sendable {
     public var has: Bool { source != NodeFix.noSource }
 }
 
-/// What a frame says: every frame of version 15.
+/// What a frame says: every frame of version 16.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -647,6 +651,11 @@ public enum Body: Equatable, Sendable {
     case off
     case send(ref: UInt32, to: Address, text: String)
     case read(through: UInt32)
+    /// Forget the conversation with `contact` through `through`: every message and invite with
+    /// that address whose `id` is `through` or less, from the node and every client of it, for
+    /// good. Only ever at the user's asking, after saying so, with the greatest `id` shown to the
+    /// user in that conversation (version 16).
+    case forget(contact: Address, through: UInt32)
     case saveContact(address: Address, name: String)
     case removeContact(address: Address)
     case endSession(address: Address)
@@ -662,6 +671,9 @@ public enum Body: Equatable, Sendable {
     /// Join the group a join code is for, which the node answers with `MADE`. Only ever a code the
     /// user asked to join from.
     case joinLink(link: String)
+    /// `forget` for a group: every group message to `group` whose `id` is `through` or less
+    /// (version 16).
+    case forgetGroup(group: GroupID, through: UInt32)
     /// An image of `size` bytes, whose SHA-256 is `digest`, follows. `signature` is the image's
     /// (`ImageSignature`), 64 bytes, or empty for none, sent to a node of version 13 or later; nil
     /// to one before, whose `UPDATE_BEGIN` ends at `digest`.
@@ -736,6 +748,11 @@ public enum Body: Equatable, Sendable {
     case fix(NodeFix)
     /// Whether the node sleeps, and how.
     case sleep(Sleep)
+    /// The user forgot every message and invite with `contact` whose `id` is `through` or less:
+    /// a client holds none of them once it has this.
+    case forgotten(contact: Address, through: UInt32)
+    /// The user forgot every group message to `group` whose `id` is `through` or less.
+    case groupForgotten(group: GroupID, through: UInt32)
 
     /// The type byte.
     public var type: UInt8 {
@@ -748,6 +765,7 @@ public enum Body: Equatable, Sendable {
         case .off: 0x06
         case .send: 0x10
         case .read: 0x11
+        case .forget: 0x12
         case .saveContact: 0x18
         case .removeContact: 0x19
         case .endSession: 0x1A
@@ -759,6 +777,7 @@ public enum Body: Equatable, Sendable {
         case .join: 0x25
         case .groupLink: 0x26
         case .joinLink: 0x27
+        case .forgetGroup: 0x28
         case .updateBegin: 0x30
         case .updateData: 0x31
         case .updateEnd: 0x32
@@ -797,6 +816,8 @@ public enum Body: Equatable, Sendable {
         case .cardGone: 0x93
         case .fix: 0x94
         case .sleep: 0x95
+        case .forgotten: 0x96
+        case .groupForgotten: 0x97
         }
     }
 
@@ -811,6 +832,7 @@ public enum Body: Equatable, Sendable {
         case .off: "OFF"
         case .send: "SEND"
         case .read: "READ"
+        case .forget: "FORGET"
         case .saveContact: "SAVE_CONTACT"
         case .removeContact: "REMOVE_CONTACT"
         case .endSession: "END_SESSION"
@@ -822,6 +844,7 @@ public enum Body: Equatable, Sendable {
         case .join: "JOIN"
         case .groupLink: "GROUP_LINK"
         case .joinLink: "JOIN_LINK"
+        case .forgetGroup: "FORGET_GROUP"
         case .updateBegin: "UPDATE_BEGIN"
         case .updateData: "UPDATE_DATA"
         case .updateEnd: "UPDATE_END"
@@ -860,6 +883,8 @@ public enum Body: Equatable, Sendable {
         case .cardGone: "CARD_GONE"
         case .fix: "FIX"
         case .sleep: "SLEEP"
+        case .forgotten: "FORGOTTEN"
+        case .groupForgotten: "GROUP_FORGOTTEN"
         }
     }
 }

@@ -355,6 +355,26 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertEqual(try Frame.decode(fifteen).body, .contact(bob))
     }
 
+    /// Forgetting is version 16's: `FORGET` and `FORGET_GROUP`, and `FORGOTTEN` and
+    /// `GROUP_FORGOTTEN`, which a client of version 15 does not know.
+    func testForgettingIsVersion16s() throws {
+        let bob = Address(Array(repeating: 7, count: 32))!
+        let hut = GroupID(Array(repeating: 0x48, count: 8))!
+        for body in [
+            Body.forget(contact: bob, through: 22), .forgetGroup(group: hut, through: 0xFFFF_FFFF),
+            .forgotten(contact: bob, through: 22), .groupForgotten(group: hut, through: 22),
+        ] {
+            XCTAssertEqual(body.since, 16, body.name)
+            let bytes = try Frame(seq: 3, body: body).encode()
+            XCTAssertEqual(try Frame.decode(bytes).body, body, body.name)
+            XCTAssertThrowsError(try Frame.decode(bytes, version: 15), body.name) {
+                XCTAssertEqual($0 as? DecodeError, .undefined)
+            }
+        }
+        XCTAssertEqual(try Frame(seq: 0, body: .forget(contact: bob, through: 1)).encode().count, 38)
+        XCTAssertEqual(try Frame(seq: 0, body: .groupForgotten(group: hut, through: 1)).encode().count, 14)
+    }
+
     /// Turning the node off is version 9's: a request with no fields, which a client sends
     /// again unchanged after giving up on its answer.
     func testOffIsVersion9s() throws {
@@ -428,6 +448,8 @@ final class CompanionVectorTests: XCTestCase {
             }
         case "SEND": return .send(ref: u32("ref"), to: addr("to"), text: str("text"))
         case "READ": return .read(through: u32("through"))
+        case "FORGET": return .forget(contact: addr("contact"), through: u32("through"))
+        case "FORGET_GROUP": return .forgetGroup(group: gid("group"), through: u32("through"))
         case "SAVE_CONTACT": return .saveContact(address: addr("address"), name: str("name"))
         case "REMOVE_CONTACT": return .removeContact(address: addr("address"))
         case "END_SESSION": return .endSession(address: addr("address"))
@@ -507,6 +529,8 @@ final class CompanionVectorTests: XCTestCase {
         case "SLEEP":
             return .sleep(Sleep(
                 wake: u16("wake"), listen: u8("listen"), state: u8("state"), keeper: u32("keeper"), retry: u16("retry")))
+        case "FORGOTTEN": return .forgotten(contact: addr("contact"), through: u32("through"))
+        case "GROUP_FORGOTTEN": return .groupForgotten(group: gid("group"), through: u32("through"))
         default: throw DecodeError.undefined
         }
     }

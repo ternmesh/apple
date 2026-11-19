@@ -1,5 +1,6 @@
 // Every conversation, latest first, with a search over their names and what was said in them; and
-// starting a new one: with a contact, with an address pasted in, or in a new group.
+// starting a new one: with a contact, with an address pasted in, or in a new group. A conversation
+// is deleted from here by swiping it, or from its context menu.
 
 import SwiftUI
 import TernKit
@@ -11,6 +12,7 @@ struct ChatsView: View {
     @State private var joining = false
     @State private var groupName = ""
     @State private var query = ""
+    @State private var forgetting: ForgetRequest?
 
     /// The conversations with the search in their name or in anything said in them.
     private var shown: [Conversation] {
@@ -48,6 +50,21 @@ struct ChatsView: View {
                 ForEach(shown) { c in
                     NavigationLink(value: c.peer) {
                         ConversationRow(conversation: c)
+                    }
+                    .contextMenu {
+                        if model.canForget(c) {
+                            Button(role: .destructive) { forgetting = ForgetRequest(c) } label: {
+                                Label("Delete Chat", systemImage: "trash")
+                            }
+                        }
+                    }
+                    // Not by a full swipe: it asks first, and the row stays until the node forgets it.
+                    .swipeActions(allowsFullSwipe: false) {
+                        if model.canForget(c) {
+                            Button(role: .destructive) { forgetting = ForgetRequest(c) } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
                     }
                 }
             }
@@ -92,6 +109,7 @@ struct ChatsView: View {
             } message: {
                 Text("The node makes the group and its secret. Invite contacts to it from the group's chat.")
             }
+            .forgetsChat($forgetting)
             .showsProblems()
         }
     }
