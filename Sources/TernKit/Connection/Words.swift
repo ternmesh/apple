@@ -120,6 +120,23 @@ public enum Words {
         + "pairings. It starts again as a new node with a new address, and must be paired again. "
         + "No one can undo this, and the people who have this node as a contact will no longer reach it."
 
+    /// The question asked before a chat is deleted (`FORGET`, `FORGET_GROUP`).
+    public static func forgetTitle(_ name: String) -> String { "Delete chat with \(name)?" }
+
+    /// What deleting a chat does, said before the user confirms it: it goes from the node and from
+    /// every client of it, for good, and what it is with stays.
+    public static func forgetWarning(group: Bool, unsent: Bool) -> String {
+        let what = group
+            ? "Every message in this group's chat is erased from your node, and from every phone or computer "
+                + "connected to it. This can't be undone. You stay in the group."
+            : "Every message and invite in this chat is erased from your node, and from every phone or computer "
+                + "connected to it. This can't be undone. The contact and any secure session with them are kept."
+        return unsent ? what + " " + forgetUnsent : what
+    }
+
+    /// Said too when some of a chat to be deleted is still to be sent: the node gives it up.
+    public static let forgetUnsent = "Messages not yet delivered won't be sent."
+
     /// What to do once the node has wiped itself: the operating system keeps its bond, which an
     /// app cannot remove.
     public static let wipeForgetBond =

@@ -528,6 +528,44 @@ final class NodeModel: ObservableObject {
     }
 
     func leaveGroup(_ group: GroupID) { request(.leaveGroup(group: group)) }
+
+    // MARK: Forgetting
+
+    /// Whether the node forgets conversations: version 16 or later. Before it, deleting a chat is
+    /// not offered.
+    var speaksForget: Bool { (agreed ?? 0) >= 16 }
+
+    /// Whether the user may delete `conversation`: the node can, the app holds what the node does,
+    /// and there is something in it to delete.
+    func canForget(_ conversation: Conversation) -> Bool {
+        speaksForget && isReady && conversation.last != nil
+    }
+
+    /// Forgets `peer`'s conversation on the node and on every client of it, for good, as far as
+    /// `through`: the greatest id the user was shown in it, so that a message that arrives while
+    /// they decide is not forgotten unseen (version 16). Only ever because the user asked, after
+    /// `Words.forgetWarning`. The node's `FORGOTTEN` takes it from the records; `then` runs once
+    /// the node has answered `OK`.
+    func forget(_ peer: Peer, through: UInt32, then: @escaping () -> Void = {}) {
+        guard speaksForget else { return }
+        switch peer {
+        case let .contact(address): request(.forget(contact: address, through: through)) { _ in then() }
+        case let .group(group): request(.forgetGroup(group: group, through: through)) { _ in then() }
+        }
+    }
+
+    /// What a conversation forgot, here or on another client, goes from what the app keeps of it
+    /// besides the records too: its notifications, and sends not answered from before it. Called
+    /// before the records take the news, while they still hold what it forgot.
+    private func forgotten(_ peer: Peer, through: UInt32) {
+        outgoing.removeAll { $0.status == .unanswered && $0.peer == peer && $0.after < through }
+        guard let node = remembered else { return }
+        let gone = Set(records.items.values.filter { $0.peer == peer && $0.id <= through }.map {
+            "item-\(node.uuidString)-\($0.id)"
+        })
+        guard !gone.isEmpty else { return }
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: Array(gone))
+    }
     func invite(_ address: Address, to group: GroupID) { request(.sendInvite(group: group, to: address)) }
     func join(_ invite: UInt32) { request(.join(id: invite)) }
 
@@ -1210,6 +1248,8 @@ final class NodeModel: ObservableObject {
                 notify(body)
             }
             if case let .nodeSelf(me) = body { askForPasskey(me) }
+            if case let .forgotten(contact, through) = body { forgotten(.contact(contact), through: through) }
+            if case let .groupForgotten(group, through) = body { forgotten(.group(group), through: through) }
             noteArrival(body)
             take()
             scheduleSave()

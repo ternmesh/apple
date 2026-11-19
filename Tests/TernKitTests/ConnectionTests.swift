@@ -259,16 +259,97 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(link.out, [])
     }
 
-    /// The client says version 15 in `HELLO`, and speaks the lesser of it and the node's.
-    func testHelloSaysFifteen() throws {
-        XCTAssertEqual(Companion.version, 15)
-        for nodeVersion: UInt8 in [11, 12, 13, 14, 15, 16] {
+    /// A client of version 15 is told nothing of what is forgotten, and does not send `FORGET`,
+    /// which its version does not define.
+    func testOlderVersion15() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 15 }!
+        let frames = older["frames"]!.array
+        XCTAssertEqual(frames[frames.count - 2]["type"]!.string, "FORGET")
+        let link = Link(Connection(version: 15, now: { 0 }, wallTime: nil))
+        XCTAssertEqual(link.replay(Array(frames.dropLast(2))), [])
+        XCTAssertEqual(link.connection.agreed, 15)
+        var result: Result<Body, RequestFailure>?
+        link.connection.submit(try Frame.decode(frames[frames.count - 2]["frame"]!.bytes).body) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(link.out, [])
+        XCTAssertNotNil(link.connection.records.sleep, "version 15 is told of sleeping")
+    }
+
+    /// Forgetting, as in the specification's `forget`: the client forgets Bob's conversation while
+    /// a message to him waits, and the group's, and holds only what came after; a client that held
+    /// every item through 21 is told at its sync what was forgotten, and keeps none of it.
+    func testForget() throws {
+        let connections = v["forget"]!.array.map(\.array)
+        XCTAssertEqual(connections.count, 2)
+        let first = connections[0]
+        let link = Link(Connection(now: { 0 }, wallTime: nil))
+        let answers = link.replay(first)
+        XCTAssertEqual(
+            answers.filter { (try? $0.get()) == nil }, [.failure(.refused(code: ErrorCode.badAddress))],
+            "FORGET of the node's own address is refused; the rest are answered")
+        XCTAssertEqual(answers.count, 5)
+        XCTAssertEqual(link.connection.records.items.keys.sorted(), [23], "only what came after")
+        XCTAssertEqual(link.connection.records.contacts.count, 1, "the contact is kept")
+        XCTAssertEqual(link.connection.records.groups.count, 1, "and the group")
+
+        // A client that held what the first sync sent, and was away.
+        var held = Records()
+        for f in first.prefix(while: { $0["type"]!.string != "SYNCED" }) {
+            let news = try Frame.decode(f["frame"]!.bytes).body
+            switch news {
+            case .message, .groupMessage, .invite: held.apply(news)
+            default: continue
+            }
+        }
+        XCTAssertEqual(held.items.keys.sorted(), Array(17...21))
+        held.syncedVersion = Companion.version
+        let away = Link(Connection(records: held, now: { 0 }, wallTime: nil))
+        _ = away.replay(connections[1])
+        XCTAssertEqual(away.connection.records.items.keys.sorted(), [23])
+        let told = away.events.compactMap { if case let .news(body) = $0 { body } else { nil } }
+        XCTAssertEqual(told.filter { if case .forgotten = $0 { true } else { false } }.count, 1)
+        XCTAssertEqual(told.filter { if case .groupForgotten = $0 { true } else { false } }.count, 1)
+    }
+
+    /// A `FORGOTTEN` is told outright: a sync that missed news still takes it, and it takes only
+    /// that address's messages and invites through its id, and a `GROUP_FORGOTTEN` only that
+    /// group's messages.
+    func testForgottenIsTakenEvenFromASyncThatMissedNews() throws {
+        var held = Records()
+        held.apply(.message(Node.message(id: 1, state: MessageState.delivered)))
+        held.apply(.message(Node.message(id: 2, state: MessageState.waiting)))
+        held.apply(.groupMessage(Node.groupMessage(id: 3, state: MessageState.sent)))
+        held.apply(.invite(Invite(
+            id: 4, contact: Node.bob, group: Node.hut, time: 0, flags: 0, state: MessageState.received, reason: 0,
+            wait: 0, name: "Hut")))
+        held.apply(.message(Message(
+            id: 5, contact: Node.carol, time: 0, flags: 0, state: MessageState.received, reason: 0, wait: 0, text: "y")))
+        held.apply(.message(Node.message(id: 6, state: MessageState.received)))
+        held.syncedVersion = Companion.version
+        let node = Node()
+        node.records = held
+        node.connection.open()
+        node.answerOne()
+        node.answerOne()
+        _ = node.sent.removeFirst()
+        node.newsCount = 1  // the first of the sync's news is lost
+        node.news(.forgotten(contact: Node.bob, through: 4))
+        node.news(.groupForgotten(group: Node.hut, through: 2))
+        node.answerSync()
+        XCTAssertEqual(node.connection.records.items.keys.sorted(), [3, 5, 6])
+        XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["SYNC"], "the sync missed news")
+    }
+
+    /// The client says version 16 in `HELLO`, and speaks the lesser of it and the node's.
+    func testHelloSaysSixteen() throws {
+        XCTAssertEqual(Companion.version, 16)
+        for nodeVersion: UInt8 in [11, 12, 13, 14, 15, 16, 17] {
             let node = Node()
             node.version = nodeVersion
             node.connection.open()
-            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 15))
+            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 16))
             node.answerAll()
-            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 15))
+            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 16))
         }
     }
 

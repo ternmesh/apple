@@ -35,7 +35,7 @@ to work on it alone.
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 14, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 16, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
@@ -121,6 +121,15 @@ From a node of version 13, the Node tab also erases the node (`WIPE`), once the 
 that its address, contacts, groups and messages go for good and that it must be paired again. Once
 the node answers, the app forgets it and everything it kept of it, and asks the user to remove the
 node in the system's Bluetooth settings too, which an app cannot do.
+
+It speaks version 16 of the companion protocol, and any earlier version a node speaks. A chat can be
+deleted from a node of version 16 or later (`FORGET`, `FORGET_GROUP`), from its menu, or by swiping
+it or from its context menu in the list. The app asks first, saying that its messages go from the
+node and from every phone or computer connected to it, for good, and that any not yet delivered
+will not be sent, and deletes only as far as the last message it showed. Leaving a group and
+removing a contact offer to delete the chat too, deleting it first. When any client deletes a chat,
+the node tells every client (`FORGOTTEN`, `GROUP_FORGOTTEN`), at once or at its next sync, and each
+removes those messages and their notifications. The contact, its session and the group are kept.
 
 When pairing fails, the app says to press the node's button, or turn it off and on (RESET on a board
 with no button), and pair within 3 minutes, or to type the PIN a node with a screen shows: a node

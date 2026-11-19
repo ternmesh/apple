@@ -222,6 +222,44 @@ final class ConversationsTests: XCTestCase {
         XCTAssertEqual(Words.heldUntilWake(600), "Held by its relay until it wakes, within 10 min")
     }
 
+    /// A `FORGOTTEN` takes the address's messages and invites through its id, whatever group an
+    /// invite is to; a `GROUP_FORGOTTEN` the group's messages; and the conversations go with them.
+    func testForgottenTakesTheConversationThroughItsId() {
+        var r = records([
+            message(1, Self.bob), invite(2, from: Self.bob, to: Self.hut), groupMessage(3, Self.hut),
+            message(4, Self.carol), groupMessage(5, Self.ridge), message(6, Self.bob),
+        ])
+        r.apply(.forgotten(contact: Self.bob, through: 5))
+        XCTAssertEqual(r.items.keys.sorted(), [3, 4, 5, 6])
+        r.apply(.groupForgotten(group: Self.hut, through: 0xFFFF_FFFF))
+        XCTAssertEqual(r.items.keys.sorted(), [4, 5, 6])
+        r.apply(.forgotten(contact: Self.carol, through: 3))
+        XCTAssertEqual(r.items.keys.sorted(), [4, 5, 6], "Carol's 4 came after")
+        XCTAssertEqual(r.conversations.map(\.peer), [.contact(Self.bob), .group(Self.ridge), .contact(Self.carol)])
+    }
+
+    /// What forgetting would give up: a message or invite waiting or sent, a group message waiting.
+    func testHasUnsent() {
+        let sentToGroup = records([groupMessage(1, Self.hut, from: 0)])
+        XCTAssertFalse(sentToGroup.conversation(with: .group(Self.hut)).hasUnsent)
+        let sent = records([message(1, Self.bob, received: false)])
+        XCTAssertTrue(sent.conversation(with: .contact(Self.bob)).hasUnsent)
+        let received = records([message(1, Self.bob)])
+        XCTAssertFalse(received.conversation(with: .contact(Self.bob)).hasUnsent)
+    }
+
+    func testForgetWords() {
+        XCTAssertEqual(Words.forgetTitle("Bob"), "Delete chat with Bob?")
+        XCTAssertEqual(
+            Words.forgetWarning(group: false, unsent: false),
+            "Every message and invite in this chat is erased from your node, and from every phone or computer "
+                + "connected to it. This can't be undone. The contact and any secure session with them are kept.")
+        XCTAssertEqual(
+            Words.forgetWarning(group: true, unsent: true),
+            "Every message in this group's chat is erased from your node, and from every phone or computer "
+                + "connected to it. This can't be undone. You stay in the group. Messages not yet delivered won't be sent.")
+    }
+
     func testWords() {
         XCTAssertEqual(Words.waiting(reason: 0, wait: 0), "Waiting")
         XCTAssertEqual(Words.waiting(reason: 1, wait: 0), "Waiting: looking for a route")

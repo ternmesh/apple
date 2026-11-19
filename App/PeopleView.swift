@@ -18,6 +18,8 @@ struct PeopleView: View {
     @State private var name = ""
     @State private var saving: Asked?
     @State private var showing: Contact?
+    /// A contact the user asked to remove, whose chat could go too: as it was shown when they asked.
+    @State private var removing: ForgetRequest?
 
     var body: some View {
         NavigationStack {
@@ -50,10 +52,10 @@ struct PeopleView: View {
                             Button("Show Code") { showing = c }
                             ShareLink(item: Sharing.link(c.address))
                             Button("Copy Address") { copyToClipboard(Sharing.text(c.address)) }
-                            Button("Remove", role: .destructive) { model.removeContact(c.address) }
+                            Button("Remove", role: .destructive) { remove(c) }
                         }
                         .swipeActions {
-                            Button("Remove", role: .destructive) { model.removeContact(c.address) }
+                            Button("Remove", role: .destructive) { remove(c) }
                             Button("Rename") { rename(c) }
                         }
                     }
@@ -86,6 +88,23 @@ struct PeopleView: View {
                 CodeSheet(title: c.name.isEmpty ? c.address.short : c.name, address: c.address)
             }
             .savesAsked($saving)
+            // A client that offers to forget while it removes sends both, the forgetting first.
+            .confirmationDialog(
+                "Remove \(removing?.name ?? "")?",
+                isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                titleVisibility: .visible,
+                presenting: removing
+            ) { r in
+                Button("Remove", role: .destructive) { if case let .contact(a) = r.peer { model.removeContact(a) } }
+                Button("Remove and Delete Chat", role: .destructive) {
+                    if case let .contact(a) = r.peer { model.forget(r.peer, through: r.through) { model.removeContact(a) } }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { r in
+                Text("The node forgets the contact. Your chat with them is kept. Remove and Delete Chat also erases "
+                    + "every message and invite in it from your node, and from every phone or computer connected to it. "
+                    + "This can't be undone." + (r.unsent ? " " + Words.forgetUnsent : ""))
+            }
             .alert(
                 "Rename contact",
                 isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })
@@ -104,6 +123,16 @@ struct PeopleView: View {
     private var nearCount: Int {
         let cards = model.speaksCards ? Set(model.records.cards.keys.map(model.records.routingId(of:))) : []
         return cards.count + model.records.neighbours.keys.filter { !cards.contains($0) }.count
+    }
+
+    /// Removes the contact, or, where its chat could go too, asks whether to delete it as well.
+    private func remove(_ c: Contact) {
+        let conversation = model.records.conversation(with: .contact(c.address))
+        if model.canForget(conversation), let request = ForgetRequest(conversation) {
+            removing = request
+        } else {
+            model.removeContact(c.address)
+        }
     }
 
     private func rename(_ c: Contact) {

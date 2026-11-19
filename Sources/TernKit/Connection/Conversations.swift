@@ -88,6 +88,17 @@ public struct Conversation: Identifiable, Equatable, Sendable {
 
     public var id: Peer { peer }
     public var last: Item? { items.last }
+
+    /// Whether any of it is still to be sent, which forgetting it gives up: a message or invite
+    /// waiting or sent. A group message once sent is on the air, and nothing more of it goes.
+    public var hasUnsent: Bool {
+        items.contains { item in
+            switch item {
+            case .groupMessage: item.state == MessageState.waiting
+            default: item.state == MessageState.waiting || item.state == MessageState.sent
+            }
+        }
+    }
 }
 
 extension Address {

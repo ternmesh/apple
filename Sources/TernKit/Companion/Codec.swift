@@ -56,6 +56,12 @@ extension Frame {
             try w.str(text, limit: Companion.textMax, field: "text")
         case let .read(through):
             w.u32(through)
+        case let .forget(contact, through), let .forgotten(contact, through):
+            w.addr(contact)
+            w.u32(through)
+        case let .forgetGroup(group, through), let .groupForgotten(group, through):
+            w.gid(group)
+            w.u32(through)
         case let .saveContact(address, name):
             w.addr(address)
             try w.str(name, limit: Companion.nameMax, field: "name")
@@ -261,6 +267,7 @@ extension Frame {
         case 0x10:
             body = .send(ref: try r.u32(), to: try r.addr(), text: try r.str(limit: Companion.textMax))
         case 0x11: body = .read(through: try r.u32())
+        case 0x12: body = .forget(contact: try r.addr(), through: try r.u32())
         case 0x18: body = .saveContact(address: try r.addr(), name: try r.str(limit: Companion.nameMax))
         case 0x19: body = .removeContact(address: try r.addr())
         case 0x1A: body = .endSession(address: try r.addr())
@@ -272,6 +279,7 @@ extension Frame {
         case 0x25: body = .join(id: try r.u32())
         case 0x26: body = .groupLink(group: try r.gid())
         case 0x27: body = .joinLink(link: try r.str(limit: Companion.linkMax))
+        case 0x28: body = .forgetGroup(group: try r.gid(), through: try r.u32())
         case 0x30:
             // A client of version 12 or earlier sends no `signature`.
             body = .updateBegin(
@@ -366,6 +374,8 @@ extension Frame {
         case 0x95:
             body = .sleep(Sleep(
                 wake: try r.u16(), listen: try r.u8(), state: try r.u8(), keeper: try r.u32(), retry: try r.u16()))
+        case 0x96: body = .forgotten(contact: try r.addr(), through: try r.u32())
+        case 0x97: body = .groupForgotten(group: try r.gid(), through: try r.u32())
         default: throw DecodeError.undefined
         }
         return Frame(seq: bytes[1], body: body)
