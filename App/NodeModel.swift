@@ -649,6 +649,25 @@ final class NodeModel: ObservableObject {
         return f
     }
 
+    /// Whether the node sleeps, as a leaf, and takes the settings for it: version 15 or later.
+    var speaksSleep: Bool { (agreed ?? 0) >= 15 }
+
+    /// Whether the node sleeps, and how, its `retry` counted down from when its record came; nil
+    /// from a node that does not tell it.
+    var sleep: Sleep? {
+        guard speaksSleep, var s = records.sleep else { return nil }
+        let since = Int(max(0, clock.timeIntervalSince(heard["s"] ?? clock)))
+        s.retry = UInt16(max(0, Int(s.retry) - since))
+        return s
+    }
+
+    /// How long `address` said it sleeps between wakes, in seconds; nil if it does not, or the
+    /// node does not say.
+    func wake(of address: Address) -> Int? {
+        guard speaksSleep, let w = records.contacts[address]?.wake, w != 0 else { return nil }
+        return Int(w)
+    }
+
     /// `p`, held under `key` as `heard` keys it, its age counted on from when its record came.
     func counted(_ p: Position, key: String) -> Position {
         var p = p
@@ -664,7 +683,8 @@ final class NodeModel: ObservableObject {
 
     /// When each position, sharing and card record held arrived: the `age`, `minutes` and `heard`
     /// each gives are as of then. Keyed "c:" and an address, "g:" a group and routing id, "sc:" and
-    /// "sg:" for sharing, "k:" and an address for a card, and "f" for the node's own fix.
+    /// "sg:" for sharing, "k:" and an address for a card, "f" for the node's own fix, and "s" for its
+    /// sleeping.
     private var heard: [String: Date] = [:]
 
     /// Notes that a position, sharing or card record arrived now: each one's `age`, `minutes` or
@@ -679,6 +699,7 @@ final class NodeModel: ObservableObject {
         case let .groupSharing(group, _): key = "sg:\(group)"
         case let .card(c): key = "k:\(c.address)"
         case .fix: key = "f"
+        case .sleep: key = "s"
         default: return
         }
         heard[key] = Date()
@@ -693,6 +714,7 @@ final class NodeModel: ObservableObject {
         keys.formUnion(new.groupSharing.keys.map { "sg:\($0)" })
         keys.formUnion(new.cards.keys.map { "k:\($0)" })
         if new.fix != nil { keys.insert("f") }
+        if new.sleep != nil { keys.insert("s") }
         heard = heard.filter { keys.contains($0.key) }
         clock = Date()
     }

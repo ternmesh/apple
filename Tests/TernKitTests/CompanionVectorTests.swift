@@ -333,6 +333,28 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertThrowsError(try Frame.decode(Array(bytes.prefix(20)))) { XCTAssertEqual($0 as? DecodeError, .malformed) }
     }
 
+    /// Sleeping is version 15's: the settings 8 and 9, `SLEEP`, and `CONTACT`'s `wake`, which a
+    /// client of version 14 is not sent.
+    func testSleepingIsVersion15s() throws {
+        XCTAssertEqual(Body.set(.wake(600)).since, 15)
+        XCTAssertEqual(Body.set(.listen(4)).since, 15)
+        XCTAssertThrowsError(try Frame.decode([0x05, 1, 8, 0x02, 0x58], version: 14)) {
+            XCTAssertEqual($0 as? DecodeError, .undefined)
+        }
+        XCTAssertEqual(try Frame.decode([0x05, 1, 8, 0x02, 0x58]).body, .set(.wake(600)))
+        let asleep = Sleep(wake: 600, listen: 4, state: Sleep.asleep, keeper: 0x1D2E_3F40, retry: 0)
+        let bytes = try Frame(seq: 0, body: .sleep(asleep)).encode()
+        XCTAssertEqual(bytes.count, 12)
+        XCTAssertEqual(try Frame.decode(bytes).body, .sleep(asleep))
+        XCTAssertThrowsError(try Frame.decode(bytes, version: 14)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        let bob = Contact(address: Address(Array(repeating: 7, count: 32))!, session: 1, name: "Bob", wake: 900)
+        let fifteen = try Frame(seq: 0, body: .contact(bob)).encode()
+        var fourteen = bob
+        fourteen.wake = nil
+        XCTAssertEqual(try Frame.decode(fifteen, version: 14).body, .contact(fourteen))
+        XCTAssertEqual(try Frame.decode(fifteen).body, .contact(bob))
+    }
+
     /// Turning the node off is version 9's: a request with no fields, which a client sends
     /// again unchanged after giving up on its answer.
     func testOffIsVersion9s() throws {
@@ -400,6 +422,8 @@ final class CompanionVectorTests: XCTestCase {
             case 5: return .set(.cards(u8("value")))
             case 6: return .set(.cardName(str("value")))
             case 7: return .set(.receiver(u8("value")))
+            case 8: return .set(.wake(u16("value")))
+            case 9: return .set(.listen(u8("value")))
             default: throw DecodeError.undefined
             }
         case "SEND": return .send(ref: u32("ref"), to: addr("to"), text: str("text"))
@@ -442,7 +466,10 @@ final class CompanionVectorTests: XCTestCase {
                 address: addr("address"), role: u8("role"), region: str("region"), power: i8("power"), time: u32("time"),
                 cards: f["cards"].map { UInt8($0.int) }, cardName: f["card_name"]?.string,
                 most: f["most"].map { UInt8($0.int) }, pairing: f["pairing"].map { UInt8($0.int) }))
-        case "CONTACT": return .contact(Contact(address: addr("address"), session: u8("session"), name: str("name")))
+        case "CONTACT":
+            return .contact(Contact(
+                address: addr("address"), session: u8("session"), name: str("name"),
+                wake: f["wake"].map { UInt16($0.int) }))
         case "CONTACT_GONE": return .contactGone(address: addr("address"))
         case "MESSAGE":
             return .message(Message(
@@ -477,6 +504,9 @@ final class CompanionVectorTests: XCTestCase {
             return .fix(NodeFix(
                 receiver: u8("receiver"), source: u8("source"), lat: i32("lat"), lon: i32("lon"),
                 altitude: i16("altitude"), accuracy: u16("accuracy"), age: u32("age"), satellites: u8("satellites")))
+        case "SLEEP":
+            return .sleep(Sleep(
+                wake: u16("wake"), listen: u8("listen"), state: u8("state"), keeper: u32("keeper"), retry: u16("retry")))
         default: throw DecodeError.undefined
         }
     }

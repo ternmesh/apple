@@ -24,6 +24,7 @@ struct ChatView: View {
         let pending = model.outgoing.filter { $0.peer == peer }
         VStack(spacing: 0) {
             sharingLine
+            sleepLine
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 10) {
@@ -104,6 +105,21 @@ struct ChatView: View {
             }
             .buttonStyle(.plain)
             .disabled(!model.isConnected)
+        }
+    }
+
+    /// A contact that sleeps, as it told the node: messages to it wait with its relay until it
+    /// next wakes, so one sent may stay sent a while.
+    @ViewBuilder
+    private var sleepLine: some View {
+        if case let .contact(address) = peer, let wake = model.wake(of: address) {
+            Label(Words.wakes(wake), systemImage: "moon.zzz")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .padding(.top, 4)
+                .accessibilityHint("Messages to this contact wait until it wakes.")
         }
     }
 
@@ -333,6 +349,10 @@ struct ItemBubble: View {
                 // A waiting one says what it waits for instead.
                 Text(item.state == MessageState.waiting
                     ? Words.waiting(reason: item.reason, wait: item.wait) : Words.state(item.state))
+            }
+            // Sent to a contact that sleeps: its relay holds it until the contact wakes.
+            if case let .message(m) = item, m.state == MessageState.sent, let wake = model.wake(of: m.contact) {
+                Text("· " + Words.heldUntilWake(wake))
             }
         }
         .font(.caption2)

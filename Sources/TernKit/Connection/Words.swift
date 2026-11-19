@@ -225,6 +225,41 @@ public enum Words {
         return "\(q < 0 ? "-" : "")\(whole)\(frac) dB"
     }
 
+    /// What a node's sleeping does now, as one line: its keeper, or the relay it will try again,
+    /// named from `names` (`Records.routingNames`) where it can be, else in hex.
+    public static func sleep(_ s: Sleep, names: [UInt32: String] = [:]) -> String {
+        let relay = names[s.keeper] ?? routingId(s.keeper)
+        switch s.state {
+        case Sleep.awake: return "Awake"
+        case Sleep.asleep: return "Asleep — kept by \(relay)"
+        case Sleep.waiting: return "Waiting for a relay to keep its messages"
+        case Sleep.resting:
+            return "No relay answers; trying \(relay) again in \(duration(UInt32(s.retry)))"
+        default: return "Sleep state \(s.state)"
+        }
+    }
+
+    /// A contact that sleeps, waking at least every `seconds`.
+    public static func wakes(_ seconds: Int) -> String {
+        "Sleeps, wakes every \(duration(UInt32(seconds)))"
+    }
+
+    /// Said of a message sent, not yet delivered, to a contact that sleeps.
+    public static func heldUntilWake(_ seconds: Int) -> String {
+        "Held by its relay until it wakes, within \(duration(UInt32(seconds)))"
+    }
+
+    /// What sleeping costs, said when the user turns it on.
+    public static let sleepTradeoff =
+        "Sleeping turns the node's radio off between check-ins, so its battery lasts far longer. A relay "
+        + "nearby holds its messages meanwhile: messages to it wait until it next wakes, up to the interval "
+        + "you choose."
+
+    /// Said to a relay's user: the setting is kept, and used once it is a leaf.
+    public static let relaysNeverSleep =
+        "Relays never sleep: they keep messages for the leaves that do. This setting applies when the "
+        + "node is a leaf."
+
     /// The bytes of `text` as `SEND` counts them, against the 128 a message may have.
     public static func textBytes(_ text: String) -> Int { text.utf8.count }
 }

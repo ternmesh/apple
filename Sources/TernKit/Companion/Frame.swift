@@ -1,11 +1,12 @@
-// The companion protocol's frames, version 14: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 15: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 13 is this with routing ids made from the address
+    /// The version this client speaks. Version 14 is this without sleeping (the settings 8 and 9,
+    /// the news `SLEEP`, and `CONTACT`'s `wake`). Version 13 is this with routing ids made from the address
     /// itself, not from a key blinded from it (RoutingNames.swift); its frames are the same.
     /// Version 12 is version 13 without signed images and wiping (`UPDATE_BEGIN`'s `signature`
     /// and the request `WIPE`). Version 11 is version 12 without updates by the bootloader (the
@@ -21,7 +22,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 14
+    public static let version: UInt8 = 15
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -36,6 +37,7 @@ public enum Companion {
         case 0x06: 9
         case 0x36: 12
         case 0x37: 13
+        case 0x95: 15
         default: 0
         }
     }
@@ -199,6 +201,12 @@ public enum Setting: Equatable, Sendable {
     /// 1 to run the node's satellite receiver, 0 to turn it off: a node refuses any other value,
     /// and 1 if it has none. Only as the user asks.
     case receiver(UInt8)
+    /// How long the node, as a leaf, lets pass between polls when it sleeps, in seconds, from
+    /// `Sleep.wakeMin` to `Sleep.wakeMax`; 0 not to sleep. Only as the user asks (version 15).
+    case wake(UInt16)
+    /// How long the node listens after each poll, in seconds, from `Sleep.listenMin` to 255.
+    /// Only as the user asks (version 15).
+    case listen(UInt8)
 
     var number: UInt8 {
         switch self {
@@ -209,6 +217,8 @@ public enum Setting: Equatable, Sendable {
         case .cards: 5
         case .cardName: 6
         case .receiver: 7
+        case .wake: 8
+        case .listen: 9
         }
     }
 
@@ -219,6 +229,7 @@ public enum Setting: Equatable, Sendable {
         switch number {
         case 5, 6: 6
         case 7: 8
+        case 8, 9: 15
         default: 0
         }
     }
@@ -277,11 +288,16 @@ public struct Contact: Equatable, Sendable {
     /// 1 if the node shares a session with it.
     public var session: UInt8
     public var name: String
+    /// How long the contact said it sleeps between wakes, in seconds, in the session the node
+    /// shares with it; 0 if it does not, has said nothing, or there is no session. From a
+    /// `CONTACT` of version 15 or later: nil before.
+    public var wake: UInt16?
 
-    public init(address: Address, session: UInt8, name: String) {
+    public init(address: Address, session: UInt8, name: String, wake: UInt16? = nil) {
         self.address = address
         self.session = session
         self.name = name
+        self.wake = wake
     }
 }
 
@@ -532,6 +548,44 @@ public struct Card: Equatable, Sendable {
     }
 }
 
+/// `SLEEP`: whether the node, as a leaf, sleeps: turns its radio off between polls while a relay,
+/// its keeper, holds its messages (version 15).
+public struct Sleep: Equatable, Sendable {
+    /// `w`, as `SET` 8 sets it: the longest between polls, in seconds, or 0 not to sleep.
+    public var wake: UInt16
+    /// `l`, as `SET` 9 sets it: how long it listens after each poll, in seconds.
+    public var listen: UInt8
+    /// What it does now: `awake`, `asleep`, `waiting` or `resting`.
+    public var state: UInt8
+    /// The keeper's routing id when asleep; the relay it will try again when resting; else 0.
+    public var keeper: UInt32
+    /// Seconds until a resting node tries `keeper` again; 0 in every other state.
+    public var retry: UInt16
+
+    public init(wake: UInt16, listen: UInt8, state: UInt8, keeper: UInt32, retry: UInt16) {
+        self.wake = wake
+        self.listen = listen
+        self.state = state
+        self.keeper = keeper
+        self.retry = retry
+    }
+
+    /// It listens all the time: not set to sleep, or a relay, which never sleeps.
+    public static let awake: UInt8 = 0
+    /// It sleeps, kept by `keeper`.
+    public static let asleep: UInt8 = 1
+    /// It is to sleep, but listens until it has a relay it can take as keeper.
+    public static let waiting: UInt8 = 2
+    /// It is to sleep, but the relays it could take did not answer its polls: it listens, and
+    /// tries `keeper` again in `retry` seconds.
+    public static let resting: UInt8 = 3
+
+    /// draft/sleeping.md's parameters.
+    public static let wakeMin: UInt16 = 300
+    public static let wakeMax: UInt16 = 3600
+    public static let listenMin: UInt8 = 2
+}
+
 /// `FIX`: the node's own fix, and what its satellite receiver is doing.
 public struct NodeFix: Equatable, Sendable {
     /// What the node's satellite receiver is doing: one of `none`, `off`, `searching`, `fixed`.
@@ -579,7 +633,7 @@ public struct NodeFix: Equatable, Sendable {
     public var has: Bool { source != NodeFix.noSource }
 }
 
-/// What a frame says: every frame of version 14.
+/// What a frame says: every frame of version 15.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -680,6 +734,8 @@ public enum Body: Equatable, Sendable {
     case cardGone(address: Address)
     /// The node's own fix, and its satellite receiver.
     case fix(NodeFix)
+    /// Whether the node sleeps, and how.
+    case sleep(Sleep)
 
     /// The type byte.
     public var type: UInt8 {
@@ -740,6 +796,7 @@ public enum Body: Equatable, Sendable {
         case .card: 0x92
         case .cardGone: 0x93
         case .fix: 0x94
+        case .sleep: 0x95
         }
     }
 
@@ -802,6 +859,7 @@ public enum Body: Equatable, Sendable {
         case .card: "CARD"
         case .cardGone: "CARD_GONE"
         case .fix: "FIX"
+        case .sleep: "SLEEP"
         }
     }
 }
