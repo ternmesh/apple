@@ -232,9 +232,17 @@ public enum Words {
     /// Said of a node that answered: this one is an owner of it.
     public static func anOwner(_ name: String) -> String { "You're an owner of \(name)." }
 
+    /// How long after delivery with no answer the user is told the node may be asleep, in seconds.
+    public static let mayBeAsleepAfter = 20.0
+
     /// The step a request to the managed node `node` is at, as its `MANAGE`'s `STATE` says: why it
-    /// waits, where it went, and how many times it has been sent.
-    public static func manageStep(_ state: UInt8?, reason: UInt8, wait: UInt16, tries: Int, node: String) -> String {
+    /// waits, where it went, and how many times it has been sent. Once delivered, a node known to
+    /// sleep every `sleeps` seconds is said to be held until it wakes; one not known to, after
+    /// `mayBeAsleepAfter` with no answer (`delivered` seconds since), may be asleep.
+    public static func manageStep(
+        _ state: UInt8?, reason: UInt8, wait: UInt16, tries: Int, node: String, sleeps: Int? = nil,
+        delivered: Double = 0
+    ) -> String {
         let again = tries > 1 ? " (try \(tries) of \(Remote.tries))" : ""
         let step: String
         switch state {
@@ -245,11 +253,67 @@ public enum Words {
             default: step = waiting(reason: reason, wait: wait)
             }
         case MessageState.sent?: step = "Sent over the mesh…"
-        case MessageState.delivered?: step = "Delivered — waiting for \(node)'s answer"
+        case MessageState.delivered?:
+            if let sleeps {
+                step = "Held until \(node) wakes (every \(duration(UInt32(sleeps))))"
+            } else if delivered >= mayBeAsleepAfter {
+                step = "Waiting for \(node). It may be asleep."
+            } else {
+                step = "Delivered — waiting for \(node)'s answer"
+            }
         case MessageState.notDelivered?: step = "Not delivered yet"
         default: step = "Asking your node to send it…"
         }
         return step + again
+    }
+
+    /// What a check of whether the user's node owns `node` is, while it runs.
+    public static func checking(_ node: String) -> String { "Checking whether you own \(node)…" }
+
+    /// A setting, as a person names it.
+    public static func settingName(_ setting: Setting) -> String {
+        switch setting {
+        case .region: "Region"
+        case .role: "Role"
+        case .power: "Transmit power"
+        case .passkey: "PIN"
+        case .cards: "Presence card"
+        case .cardName: "Card name"
+        case .receiver: "Satellite receiver"
+        case .wake: "Sleep"
+        case .listen: "Listen time"
+        case .lock: "Bluetooth lock"
+        }
+    }
+
+    /// A setting's name inside a sentence: lower case but for names, as Bluetooth and PIN.
+    public static func settingInSentence(_ setting: Setting) -> String {
+        switch setting {
+        case .passkey, .lock: settingName(setting)
+        default: settingName(setting).lowercased()
+        }
+    }
+
+    /// What became of a check, or of a request to manage `node`, said once it is over while the
+    /// user is elsewhere: in a notification, or a notice.
+    public enum ManageOutcome: Equatable, Sendable {
+        case owner, notOwner, noAnswer
+        case set(Setting)
+        case owners, restarting
+        case failed(String)
+    }
+
+    /// `outcome`, in words, for the node `node`. `tap` adds what tapping a notification does.
+    public static func outcome(_ outcome: ManageOutcome, node: String, tap: Bool = false) -> String {
+        switch outcome {
+        case .owner: tap ? "You're an owner of \(node). Tap to manage it." : anOwner(node)
+        case .notOwner: "You're not an owner of \(node)."
+        case .noAnswer: "No answer from \(node)."
+        case let .set(setting): "\(settingName(setting)) set on \(node)"
+        case .owners: "Owners changed on \(node)"
+        case .restarting: "\(node) is restarting"
+        case let .failed(why): "\(node): \(why)"
+        }
     }
 
     /// Said while a request waits for the node `node`, known to sleep `wake` seconds between wakes.

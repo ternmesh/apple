@@ -28,7 +28,9 @@ struct ManageView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Manage \(name)")
+        .onDisappear { node.shown -= 1 }
         .onAppear {
+            node.shown += 1
             if !node.synced && !node.isBusy { node.refresh() }
             power = Int(node.records.me?.power ?? 0)
         }

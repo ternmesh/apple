@@ -149,12 +149,16 @@ struct RootView: View {
     /// Each screen holds its own navigation stack.
     @ViewBuilder
     private func screen(_ s: Pane) -> some View {
-        switch s {
-        case .chats: ChatsView()
-        case .people: PeopleView()
-        case .map: MapView()
-        case .node: NodeView()
+        Group {
+            switch s {
+            case .chats: ChatsView()
+            case .people: PeopleView()
+            case .map: MapView()
+            case .node: NodeView()
+            }
         }
+        // A check or a request to a managed node, wherever the user goes while it runs.
+        .safeAreaInset(edge: .bottom, spacing: 0) { ManagingIndicator() }
     }
 }
 

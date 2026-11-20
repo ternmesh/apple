@@ -30,6 +30,13 @@ struct ChatView: View {
 
     private static let end = "end"
 
+    /// A notification of being an owner, tapped, opens the contact's Manage screen.
+    private func openManageIfAsked() {
+        guard case let .contact(address) = peer, model.manageRequested == address else { return }
+        model.manageRequested = nil
+        managing = true
+    }
+
     var body: some View {
         let conversation = model.records.conversation(with: peer)
         let pending = model.outgoing.filter { $0.peer == peer }
@@ -61,7 +68,11 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) { menu(conversation) }
         }
-        .onAppear { model.visible = peer }
+        .onAppear {
+            model.visible = peer
+            openManageIfAsked()
+        }
+        .onChange(of: model.manageRequested) { _ in openManageIfAsked() }
         .onDisappear { if model.visible == peer { model.visible = nil } }
         .alert(title, isPresented: $naming) {
             TextField("Name", text: $name)
@@ -254,7 +265,10 @@ struct ChatView: View {
             // Owners and managing, for a node of version 17: the contact is a node too.
             if model.speaksManaging, let contact {
                 Divider()
-                ManageMenuItems(address: address, manage: { managing = true }, check: { checking = true })
+                ManageMenuItems(address: address, manage: { managing = true }, check: {
+                    model.checkOwner(address)
+                    checking = true
+                })
                 if contact.isOwner {
                     Button("Remove as Owner of Your Node") { model.setOwner(address, false) }
                 } else if contact.owner != nil {

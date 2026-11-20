@@ -103,6 +103,8 @@ public final class Remote {
     /// says: 0 when it is not waiting, or has said nothing.
     public private(set) var reason: UInt8 = 0
     public private(set) var wait: UInt16 = 0
+    /// When the manager said the request was delivered, by `now`; nil before, and once answered.
+    public private(set) var deliveredAt: Double?
     /// The request being asked now, and how many times it has been sent.
     public var asking: Body? { inFlight?.pending.body ?? queue.first?.body }
     public var tries: Int { inFlight?.tries ?? 0 }
@@ -282,6 +284,7 @@ public final class Remote {
             let asleep = f.sent + sleepWait
             switch s.state {
             case MessageState.delivered:
+                if !f.delivered { deliveredAt = now() }
                 f.delivered = true
                 f.deadline = max(now() + Companion.meshAnswerWait, asleep)
             case MessageState.notDelivered:
@@ -438,6 +441,7 @@ public final class Remote {
         progress = nil
         reason = 0
         wait = 0
+        deliveredAt = nil
     }
 
     /// Sends `frame` in a new `MANAGE`: a request tried again goes as a new message, the same frame

@@ -146,8 +146,12 @@ of its contacts are owners, and restarting it. Each request goes one at a time, 
 three times 15 s apart if it was not delivered, and is waited on for 2 minutes once it was; for a
 node known to sleep (its last sync's `SLEEP`, else its contact's `wake`), until its wake and listen
 have passed and 2 minutes more. `ERROR` 15 stops it at once. The screen says the step it is at:
-first contact, finding a route, the airtime it waits for, delivered and waiting for the answer, the
-try, and how long a node that sleeps may take. A setting changed is on trial for 15 minutes, and the app confirms it with a `PING` at
+first contact, finding a route, the airtime it waits for, delivered and waiting for the answer (held
+until a node known to sleep wakes, or, 20 s on, that it may be asleep), the try, and how long a node
+that sleeps may take. A check or a request belongs to the app, not its screen: it goes on when the
+user leaves the screen or the app, for as long as the link lasts, shows under every screen with Stop
+while it runs, and stops only on Stop. What became of it is said on its screen, else as a notice,
+else, in the background, in a notification; one that says the user is an owner opens Manage. A setting changed is on trial for 15 minutes, and the app confirms it with a `PING` at
 once, or 45 s later for a role or a power, which restart the node; until then the screen says it is
 on trial. When a node's owners change, the node tells them (`OWNER_CHANGED`), and the app says who
 was made or is no longer an owner of which node, at the node or over the mesh. The Node tab says

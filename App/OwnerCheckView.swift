@@ -1,6 +1,7 @@
 // Whether the user's node is an owner of a contact's node: one `HELLO` over the mesh. An answer
 // means it is, and the node can be managed from here; `ERROR` 15 means it is not; no answer says
 // neither, and nothing is kept. Like a login: in, or not, and while it waits, the step it is at.
+// The check is the model's: it goes on when the user leaves, and this screen shows it again.
 
 import SwiftUI
 import TernKit
@@ -50,9 +51,44 @@ struct OwnerCheckView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Owner of \(name)?")
-        .onAppear {
-            if model.isReady && !node.isBusy { node.check() }
+        .onAppear { node.shown += 1 }
+        .onDisappear { node.shown -= 1 }
+    }
+}
+
+/// What is asked of managed nodes, under every screen while it runs: the step it is at, and Stop.
+struct ManagingIndicator: View {
+    @EnvironmentObject private var model: NodeModel
+
+    var body: some View {
+        if !model.busyManaged.isEmpty {
+            VStack(spacing: 0) {
+                Divider()
+                ForEach(model.busyManaged, id: \.address) { ManagingRow(node: $0) }
+            }
+            .background(.bar)
         }
+    }
+}
+
+private struct ManagingRow: View {
+    @ObservedObject var node: ManagedNode
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            VStack(alignment: .leading, spacing: 2) {
+                if let asking = node.asking { Text(asking).font(.subheadline).lineLimit(1) }
+                if let working = node.working {
+                    Text(working).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Stop", role: .destructive) { node.cancel() }
+                .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 }
 

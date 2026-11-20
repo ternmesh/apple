@@ -143,6 +143,11 @@ final class NodeModel: ObservableObject {
     @Published private(set) var owned = Owned() {
         didSet { keepOwned() }
     }
+    /// The managed nodes with something asked, a check or a request, shown wherever the user is
+    /// until it is over or stopped.
+    @Published private(set) var busyManaged: [ManagedNode] = []
+    /// A managed node whose Manage screen a tapped notification asked for: its chat opens it.
+    @Published var manageRequested: Address?
     @Published private(set) var firmware: String?
     /// The node's board and release, from an `INFO` of version 4 or later; nil before. An empty
     /// board is a node that cannot be updated over Bluetooth.
@@ -314,6 +319,7 @@ final class NodeModel: ObservableObject {
             // Managed through the node before: their requests and answers are that node's.
             for m in managedNodes.values { m.cancel() }
             managedNodes = [:]
+            busyManaged = []
             chatPath = []
             seen = [:]
             queuedFloor = 0
@@ -385,6 +391,7 @@ final class NodeModel: ObservableObject {
         owned = Owned()
         for m in managedNodes.values { m.cancel() }
         managedNodes = [:]
+        busyManaged = []
         chatPath = []
         seen = [:]
         queuedFloor = 0
@@ -578,8 +585,42 @@ final class NodeModel: ObservableObject {
             guard let c = self?.link.connection else { return then(.failure(.closed)) }
             c.submit(body, then: then)
         }
+        m.onBusy = { [weak self, weak m] in
+            guard let self, let m else { return }
+            self.busyManaged.removeAll { $0 === m }
+            if m.isBusy { self.busyManaged.append(m) }
+        }
+        m.onOutcome = { [weak self, weak m] outcome in
+            guard let self, let m else { return }
+            self.managedOutcome(m, outcome)
+        }
         managedNodes[address] = m
         return m
+    }
+
+    /// Starts a check of whether this app's node is an owner of the node at `address`, unless one
+    /// is under way; it goes on wherever the user goes.
+    func checkOwner(_ address: Address) {
+        guard isReady else { return }
+        let m = managed(address)
+        if !m.isBusy { m.check() }
+    }
+
+    /// Says what became of a check or a request to a managed node, once it is over: on its screen if
+    /// that is showing, else as a notice while the app is in front, else in a notification, which
+    /// for an owner opens its Manage screen.
+    private func managedOutcome(_ m: ManagedNode, _ outcome: Words.ManageOutcome) {
+        let name = records.name(of: .contact(m.address))
+        if isActive {
+            guard m.shown == 0 else { return }
+            m.problem = nil
+            noticeTitle = "Managing"
+            notice = Words.outcome(outcome, node: name)
+        } else if let node = remembered {
+            post(identifier: "manage-\(UUID().uuidString)", peer: .contact(m.address), on: node,
+                 subtitle: "Managing", body: Words.outcome(outcome, node: name, tap: outcome == .owner),
+                 manage: outcome == .owner)
+        }
     }
 
     /// Makes the contact `address` one of the node's owners, or not. Only ever because the user
@@ -1416,7 +1457,9 @@ final class NodeModel: ObservableObject {
     /// A notification of the conversation `peer` on `node` (the remembered node's, unless said),
     /// which opens it when tapped and can be replied to. Another node's is titled without these
     /// records, which are not its.
-    private func post(identifier: String, peer: Peer, on node: UUID? = nil, subtitle: String? = nil, body: String) {
+    private func post(
+        identifier: String, peer: Peer, on node: UUID? = nil, subtitle: String? = nil, body: String, manage: Bool = false
+    ) {
         guard let node = node ?? remembered else { return }
         let content = UNMutableNotificationContent()
         content.title = node == remembered ? records.name(of: peer) : "Tern"
@@ -1424,15 +1467,16 @@ final class NodeModel: ObservableObject {
         content.body = body
         content.sound = .default
         content.categoryIdentifier = Notifications.category
-        content.userInfo = Notifications.userInfo(peer, node: node)
+        content.userInfo = Notifications.userInfo(peer, node: node, manage: manage)
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
 
     /// Opens the conversation `peer` on the Chats screen, for a notification tapped. One of a node
     /// the app has since left is not opened against another's records.
-    func open(_ peer: Peer, on node: UUID) {
+    func open(_ peer: Peer, on node: UUID, manage: Bool = false) {
         guard node == remembered else { return }
+        if manage, case let .contact(address) = peer { manageRequested = address }
         chatPath = [peer]
         opened += 1
     }

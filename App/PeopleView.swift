@@ -60,7 +60,10 @@ struct PeopleView: View {
                             Button("Copy Address") { copyToClipboard(Sharing.text(c.address)) }
                             if model.speaksManaging {
                                 ManageMenuItems(
-                                    address: c.address, manage: { managing = c.address }, check: { checking = c.address })
+                                    address: c.address, manage: { managing = c.address }, check: {
+                                        model.checkOwner(c.address)
+                                        checking = c.address
+                                    })
                                 if c.isOwner {
                                     Button("Remove as Owner") { model.setOwner(c.address, false) }
                                 } else if c.owner != nil {

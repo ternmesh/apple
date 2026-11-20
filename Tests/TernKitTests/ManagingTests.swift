@@ -465,6 +465,13 @@ final class RemoteTests: XCTestCase {
         remote.take(.state(MessageState(id: id, state: MessageState.sent, reason: 0, wait: 0)))
         XCTAssertEqual(remote.reason, 0)
         XCTAssertEqual(remote.wait, 0)
+        XCTAssertNil(remote.deliveredAt)
+        time += 7
+        state(remote, id, MessageState.delivered)
+        XCTAssertEqual(remote.deliveredAt, time)
+        time += 30
+        state(remote, id, MessageState.delivered)
+        XCTAssertEqual(remote.deliveredAt, time - 30, "from the first time it was said")
     }
 
     /// A node known to sleep is waited for through its wake, its listen and `MESH_ANSWER_WAIT`.
@@ -559,6 +566,32 @@ final class ManagingWordsTests: XCTestCase {
         XCTAssertEqual(Words.notYours, "Not yours: its owner can add you.")
         XCTAssertNotEqual(Words.error(ErrorCode.notAnOwner), Words.error(200), "15 is named; an unknown code is not")
         XCTAssertEqual(Words.manage(.refused(code: 200)), "The node refused (200).")
+    }
+
+    /// Once delivered: held for a node known to sleep, and may be asleep after a while unanswered.
+    func testHeldForASleepingNode() {
+        func delivered(sleeps: Int? = nil, after: Double = 0) -> String {
+            Words.manageStep(
+                MessageState.delivered, reason: 0, wait: 0, tries: 1, node: "Hut", sleeps: sleeps, delivered: after)
+        }
+        XCTAssertEqual(delivered(), "Delivered — waiting for Hut's answer")
+        XCTAssertEqual(delivered(after: Words.mayBeAsleepAfter - 1), "Delivered — waiting for Hut's answer")
+        XCTAssertEqual(delivered(after: Words.mayBeAsleepAfter), "Waiting for Hut. It may be asleep.")
+        XCTAssertEqual(delivered(sleeps: 300), "Held until Hut wakes (every 5 min)")
+        XCTAssertEqual(delivered(sleeps: 300, after: 100), "Held until Hut wakes (every 5 min)")
+        XCTAssertEqual(Words.checking("Hut"), "Checking whether you own Hut…")
+    }
+
+    /// What became of a check or a request, said where the user is.
+    func testOutcomes() {
+        XCTAssertEqual(Words.outcome(.owner, node: "Hut", tap: true), "You're an owner of Hut. Tap to manage it.")
+        XCTAssertEqual(Words.outcome(.owner, node: "Hut"), "You're an owner of Hut.")
+        XCTAssertEqual(Words.outcome(.notOwner, node: "Hut"), "You're not an owner of Hut.")
+        XCTAssertEqual(Words.outcome(.noAnswer, node: "Hut"), "No answer from Hut.")
+        XCTAssertEqual(Words.outcome(.set(.cardName("Hut")), node: "Hut"), "Card name set on Hut")
+        XCTAssertEqual(Words.outcome(.set(.power(14)), node: "Hut"), "Transmit power set on Hut")
+        XCTAssertEqual(Words.settingInSentence(.lock(1)), "Bluetooth lock")
+        XCTAssertEqual(Words.settingInSentence(.wake(300)), "sleep")
     }
 }
 
