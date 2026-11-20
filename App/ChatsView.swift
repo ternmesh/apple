@@ -53,7 +53,7 @@ struct ChatsView: View {
                     }
                     .contextMenu {
                         if model.canForget(c) {
-                            Button(role: .destructive) { forgetting = ForgetRequest(c) } label: {
+                            Button(role: .destructive) { askToForget(c) } label: {
                                 Label("Delete Chat", systemImage: "trash")
                             }
                         }
@@ -61,7 +61,7 @@ struct ChatsView: View {
                     // Not by a full swipe: it asks first, and the row stays until the node forgets it.
                     .swipeActions(allowsFullSwipe: false) {
                         if model.canForget(c) {
-                            Button(role: .destructive) { forgetting = ForgetRequest(c) } label: {
+                            Button(role: .destructive) { askToForget(c) } label: {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
@@ -112,6 +112,15 @@ struct ChatsView: View {
             .forgetsChat($forgetting)
             .showsProblems()
         }
+    }
+
+    /// Asks before deleting `conversation`, as it is shown now. The dialog comes up on the next turn
+    /// of the main queue, once the swipe or the context menu has closed: SwiftUI's list crashed
+    /// (a `UICollectionView` batch update it judged invalid) when a row's swipe was still closing as
+    /// the dialog came and went and the node's `FORGOTTEN` took the row away.
+    private func askToForget(_ conversation: Conversation) {
+        guard let request = ForgetRequest(conversation) else { return }
+        DispatchQueue.main.async { forgetting = request }
     }
 }
 
