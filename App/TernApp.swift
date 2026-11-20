@@ -163,7 +163,7 @@ struct ProblemAlert: ViewModifier {
     @EnvironmentObject private var model: NodeModel
 
     func body(content: Content) -> some View {
-        let title: String = model.problem != nil ? "Could not do that" : "Sharing your location"
+        let title: String = model.problem != nil ? "Could not do that" : model.noticeTitle
         return content.alert(
             title,
             isPresented: Binding(

@@ -31,7 +31,7 @@ extension Frame {
             w.u8(version)
         case let .sync(after):
             w.u32(after)
-        case .ping, .off, .ok, .updateEnd, .updateBootloader, .wipe:
+        case .ping, .off, .ok, .updateEnd, .updateBootloader, .wipe, .restart:
             break
         case let .synced(news):
             if let news { w.u8(news) }
@@ -49,6 +49,7 @@ extension Frame {
             case let .receiver(on): w.u8(on)
             case let .wake(seconds): w.u16(seconds)
             case let .listen(seconds): w.u8(seconds)
+            case let .lock(on): w.u8(on)
             }
         case let .send(ref, to, text):
             w.u32(ref)
@@ -62,6 +63,21 @@ extension Frame {
         case let .forgetGroup(group, through), let .groupForgotten(group, through):
             w.gid(group)
             w.u32(through)
+        case let .manage(ref, to, request):
+            w.u32(ref)
+            w.addr(to)
+            try w.blob(request, limit: Companion.requestMax, field: "request")
+        case let .owner(address, owner):
+            w.addr(address)
+            w.u8(owner)
+        case let .managed(from, answer):
+            w.addr(from)
+            try w.blob(answer, limit: Companion.answerMax, field: "answer")
+        case let .ownerChanged(c):
+            w.addr(c.from)
+            w.addr(c.contact)
+            w.u8(c.owner)
+            w.u8(c.by)
         case let .saveContact(address, name):
             w.addr(address)
             try w.str(name, limit: Companion.nameMax, field: "name")
@@ -133,18 +149,21 @@ extension Frame {
             try w.str(s.region, limit: Companion.regionMax, field: "region")
             w.i8(s.power)
             w.u32(s.time)
-            // Version 6's fields, both or neither; then version 10's and version 11's after them.
-            if s.cards != nil || s.cardName != nil || s.most != nil || s.pairing != nil {
+            // Version 6's fields, both or neither; then version 10's, 11's and 17's after them.
+            if s.cards != nil || s.cardName != nil || s.most != nil || s.pairing != nil || s.locked != nil {
                 w.u8(s.cards ?? 0)
                 try w.str(s.cardName ?? "", limit: Companion.cardNameMax, field: "card name")
             }
-            if s.most != nil || s.pairing != nil { w.u8(s.most ?? 0) }
-            if let pairing = s.pairing { w.u8(pairing) }
+            if s.most != nil || s.pairing != nil || s.locked != nil { w.u8(s.most ?? 0) }
+            if s.pairing != nil || s.locked != nil { w.u8(s.pairing ?? 0) }
+            if let locked = s.locked { w.u8(locked) }
         case let .contact(c):
             w.addr(c.address)
             w.u8(c.session)
             try w.str(c.name, limit: Companion.nameMax, field: "name")
-            if let wake = c.wake { w.u16(wake) }
+            // Version 15's `wake`, then version 17's `owner` after it.
+            if c.wake != nil || c.owner != nil { w.u16(c.wake ?? 0) }
+            if let owner = c.owner { w.u8(owner) }
         case let .message(m):
             w.u32(m.id)
             w.addr(m.contact)
@@ -261,6 +280,7 @@ extension Frame {
             case 7: body = .set(.receiver(try r.u8()))
             case 8: body = .set(.wake(try r.u16()))
             case 9: body = .set(.listen(try r.u8()))
+            case 10: body = .set(.lock(try r.u8()))
             default: throw DecodeError.undefined
             }
         case 0x06: body = .off
@@ -268,6 +288,9 @@ extension Frame {
             body = .send(ref: try r.u32(), to: try r.addr(), text: try r.str(limit: Companion.textMax))
         case 0x11: body = .read(through: try r.u32())
         case 0x12: body = .forget(contact: try r.addr(), through: try r.u32())
+        case 0x13:
+            body = .manage(ref: try r.u32(), to: try r.addr(), request: try r.blob(limit: Companion.requestMax))
+        case 0x14: body = .owner(address: try r.addr(), owner: try r.u8())
         case 0x18: body = .saveContact(address: try r.addr(), name: try r.str(limit: Companion.nameMax))
         case 0x19: body = .removeContact(address: try r.addr())
         case 0x1A: body = .endSession(address: try r.addr())
@@ -289,6 +312,7 @@ extension Frame {
         case 0x32: body = .updateEnd
         case 0x36: body = .updateBootloader
         case 0x37: body = .wipe
+        case 0x38: body = .restart
         case 0x33:
             body = .setPosition(
                 lat: try r.i32(), lon: try r.i32(), altitude: try r.i16(), accuracy: try r.u16(), age: try r.u16())
@@ -329,11 +353,15 @@ extension Frame {
             if version >= 10 { me.most = try r.u8() }
             // And one of version 10 or earlier, one without `pairing`.
             if version >= 11 { me.pairing = try r.u8() }
+            // And one of version 16 or earlier, one without `locked`.
+            if version >= 17 { me.locked = try r.u8() }
             body = .nodeSelf(me)
         case 0x81:
             var c = Contact(address: try r.addr(), session: try r.u8(), name: try r.str(limit: Companion.nameMax))
             // A client of version 14 or earlier is sent a `CONTACT` without `wake`.
             if version >= 15 { c.wake = try r.u16() }
+            // And one of version 16 or earlier, one without `owner`.
+            if version >= 17 { c.owner = try r.u8() }
             body = .contact(c)
         case 0x82: body = .contactGone(address: try r.addr())
         case 0x83:
@@ -376,6 +404,9 @@ extension Frame {
                 wake: try r.u16(), listen: try r.u8(), state: try r.u8(), keeper: try r.u32(), retry: try r.u16()))
         case 0x96: body = .forgotten(contact: try r.addr(), through: try r.u32())
         case 0x97: body = .groupForgotten(group: try r.gid(), through: try r.u32())
+        case 0x98: body = .managed(from: try r.addr(), answer: try r.blob(limit: Companion.answerMax))
+        case 0x99:
+            body = .ownerChanged(OwnerChange(from: try r.addr(), contact: try r.addr(), owner: try r.u8(), by: try r.u8()))
         default: throw DecodeError.undefined
         }
         return Frame(seq: bytes[1], body: body)

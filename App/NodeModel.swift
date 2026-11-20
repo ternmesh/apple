@@ -156,8 +156,12 @@ final class NodeModel: ObservableObject {
     }
     /// A refusal or failure to show the user, once.
     @Published var problem: String?
-    /// Something to tell the user that is not a failure, once.
+    /// Something to tell the user that is not a failure, once, under `noticeTitle`.
     @Published var notice: String?
+    @Published var noticeTitle = "Sharing your location"
+    /// The node refused a request over Bluetooth because its Bluetooth is locked (`ERROR` 14): only
+    /// USB, or one of its owners over the mesh, can unlock it. Until the next connection.
+    @Published private(set) var bluetoothLocked = false
     /// The user has let the app have their location: the map shows it, and the node is given it.
     @Published private(set) var locationAllowed = false
     /// The first-run setup was finished, or skipped, for this node.
@@ -499,7 +503,9 @@ final class NodeModel: ObservableObject {
         c.submit(body) { [weak self] result in
             switch result {
             case let .success(answer): then(answer)
-            case let .failure(f): self?.problem = Words.failure(f)
+            case let .failure(f):
+                if f == .refused(code: ErrorCode.locked) { self?.bluetoothLocked = true }
+                self?.problem = Words.failure(f)
             }
         }
     }
@@ -528,6 +534,52 @@ final class NodeModel: ObservableObject {
     }
 
     func leaveGroup(_ group: GroupID) { request(.leaveGroup(group: group)) }
+
+    // MARK: Owners and managing
+
+    /// Whether the node has owners and manages others over the mesh: version 17 or later. Before
+    /// it, neither is offered.
+    var speaksManaging: Bool { (agreed ?? 0) >= 17 }
+
+    /// The nodes this app manages over the mesh through its own, this run, by address.
+    private var managedNodes: [Address: ManagedNode] = [:]
+
+    /// The node at `address`, managed over the mesh through this one: the same each time asked, so
+    /// that leaving its screen and coming back keeps what it said.
+    func managed(_ address: Address) -> ManagedNode {
+        if let m = managedNodes[address] { return m }
+        let m = ManagedNode(address: address, now: BluetoothLink.clock) { [weak self] body, then in
+            guard let c = self?.link.connection else { return then(.failure(.closed)) }
+            c.submit(body, then: then)
+        }
+        managedNodes[address] = m
+        return m
+    }
+
+    /// Makes the contact `address` one of the node's owners, or not. Only ever because the user
+    /// asked, after `Words.ownerWarning`.
+    func setOwner(_ address: Address, _ owner: Bool) {
+        guard speaksManaging else { return }
+        request(.owner(address: address, owner: owner ? 1 : 0))
+    }
+
+    /// Tells the user of an `OWNER_CHANGED`: who may manage a node changed, which they may not have
+    /// done. As a notice while the app is in front, and a notification while it is not.
+    private func ownerChanged(_ change: OwnerChange) {
+        let you = records.me?.address == change.contact
+        let text = Words.ownerChanged(
+            change, contact: records.name(of: .contact(change.contact)), node: records.name(of: .contact(change.from)),
+            you: you)
+        if isActive {
+            // Another such notice not yet read is kept, above this one.
+            let before = noticeTitle == "Owners changed" ? notice : nil
+            noticeTitle = "Owners changed"
+            notice = before.map { $0 + "\n\n" + text } ?? text
+        } else if let node = remembered {
+            post(identifier: "owner-\(UUID().uuidString)", peer: .contact(change.from), on: node,
+                 subtitle: "Owners changed", body: text)
+        }
+    }
 
     // MARK: Forgetting
 
@@ -841,6 +893,7 @@ final class NodeModel: ObservableObject {
         UserDefaults.standard.set(true, forKey: Self.toldNoLocationKey)
         // After the share sheet has gone: an alert over a sheet on its way out is lost.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            self?.noticeTitle = "Sharing your location"
             self?.notice = "Without location access the node shares only what its own receiver finds, if it has one."
         }
     }
@@ -904,6 +957,7 @@ final class NodeModel: ObservableObject {
                     delivered.removeDeliveredNotifications(withIdentifiers: mine)
                 }
                 self.forget(id)
+                self.noticeTitle = "Node erased"
                 self.notice = Words.wipeForgetBond
             case .success:
                 self.problem = "The node answered something the app did not expect. It may not have been erased."
@@ -1228,6 +1282,7 @@ final class NodeModel: ObservableObject {
     private func handle(_ event: ConnectionEvent) {
         switch event {
         case let .ready(version, fw):
+            bluetoothLocked = false
             askedForPasskey = false
             asksForPasskey = false
             alertsForPasskey = false
@@ -1250,6 +1305,12 @@ final class NodeModel: ObservableObject {
             if case let .nodeSelf(me) = body { askForPasskey(me) }
             if case let .forgotten(contact, through) = body { forgotten(.contact(contact), through: through) }
             if case let .groupForgotten(group, through) = body { forgotten(.group(group), through: through) }
+            if case let .ownerChanged(change) = body { ownerChanged(change) }
+            // What became of a request to a managed node, and its answers.
+            switch body {
+            case .state, .managed: for m in managedNodes.values { m.take(body) }
+            default: break
+            }
             noteArrival(body)
             take()
             scheduleSave()
@@ -1258,6 +1319,8 @@ final class NodeModel: ObservableObject {
             save()
             syncedOnThisLink = true
             nodeSynced()
+        case .syncRefused(ErrorCode.locked):
+            bluetoothLocked = true
         case .refused, .gone, .syncRefused:
             break
         }

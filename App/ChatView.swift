@@ -21,6 +21,10 @@ struct ChatView: View {
     @State private var ending = false
     @State private var sharingLocation = false
     @State private var showingCode = false
+    /// The Manage screen of the contact's node, over the mesh.
+    @State private var managing = false
+    /// A contact the user asked to make an owner of their node, until they confirm.
+    @State private var owning: Contact?
 
     private static let end = "end"
 
@@ -87,6 +91,10 @@ struct ChatView: View {
                 + (leavingThrough == nil ? "" : " Leave and Delete Chat also erases its messages from your node, and from every phone or computer connected to it. This can't be undone."))
         }
         .forgetsChat($forgetting) { dismiss() }
+        .makesOwner($owning)
+        .navigationDestination(isPresented: $managing) {
+            if case let .contact(address) = peer { ManageView(node: model.managed(address)) }
+        }
         .confirmationDialog("End the session?", isPresented: $ending, titleVisibility: .visible) {
             Button("End Session", role: .destructive) {
                 if case let .contact(a) = peer { model.endSession(a) }
@@ -238,8 +246,19 @@ struct ChatView: View {
                 Button("End Session", role: .destructive) { ending = true }
             }
             forgetButton(conversation)
+            // Owners and managing, for a node of version 17: the contact is a node too.
+            if model.speaksManaging, let contact {
+                Divider()
+                Button("Manage Their Node…") { managing = true }
+                if contact.isOwner {
+                    Button("Remove as Owner of Your Node") { model.setOwner(address, false) }
+                } else if contact.owner != nil {
+                    Button("Make Owner of Your Node…") { owning = contact }
+                }
+            }
             if let contact {
                 Text(contact.session == 1 ? "Session: yes" : "Session: no")
+                if contact.isOwner { Text("Owner of your node") }
             }
         } label: {
             Label("Contact", systemImage: "ellipsis.circle")

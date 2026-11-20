@@ -352,7 +352,7 @@ final class CompanionVectorTests: XCTestCase {
         var fourteen = bob
         fourteen.wake = nil
         XCTAssertEqual(try Frame.decode(fifteen, version: 14).body, .contact(fourteen))
-        XCTAssertEqual(try Frame.decode(fifteen).body, .contact(bob))
+        XCTAssertEqual(try Frame.decode(fifteen, version: 16).body, .contact(bob))
     }
 
     /// Forgetting is version 16's: `FORGET` and `FORGET_GROUP`, and `FORGOTTEN` and
@@ -373,6 +373,49 @@ final class CompanionVectorTests: XCTestCase {
         }
         XCTAssertEqual(try Frame(seq: 0, body: .forget(contact: bob, through: 1)).encode().count, 38)
         XCTAssertEqual(try Frame(seq: 0, body: .groupForgotten(group: hut, through: 1)).encode().count, 14)
+    }
+
+    /// Managing is version 17's: `MANAGE`, `OWNER` and `RESTART`, the setting 10, `MANAGED` and
+    /// `OWNER_CHANGED`, and `CONTACT`'s `owner` and `SELF`'s `locked`, which a client of version
+    /// 16 is not sent.
+    func testManagingIsVersion17s() throws {
+        let bob = Address(Array(repeating: 7, count: 32))!
+        let ada = Address(Array(repeating: 9, count: 32))!
+        for body in [
+            Body.manage(ref: 1, to: bob, request: [0x03, 0x01]), .owner(address: bob, owner: 1), .restart,
+            .managed(from: bob, answer: [0x02, 0x40, 0x01]),
+            .ownerChanged(OwnerChange(from: bob, contact: ada, owner: 0, by: OwnerChange.byMesh)), .set(.lock(1)),
+        ] {
+            XCTAssertEqual(body.since, 17, body.name)
+            let bytes = try Frame(seq: 3, body: body).encode()
+            XCTAssertEqual(try Frame.decode(bytes).body, body, body.name)
+            XCTAssertThrowsError(try Frame.decode(bytes, version: 16), body.name) {
+                XCTAssertEqual($0 as? DecodeError, .undefined)
+            }
+        }
+        // A request or an answer of more than 128 bytes is not one.
+        XCTAssertThrowsError(try Frame(seq: 0, body: .manage(ref: 1, to: bob, request: Array(repeating: 3, count: 129))).encode())
+        XCTAssertNoThrow(try Frame(seq: 0, body: .managed(from: bob, answer: Array(repeating: 3, count: 128))).encode())
+
+        let owner = Contact(address: bob, session: 1, name: "Bob", wake: 0, owner: 1)
+        let seventeen = try Frame(seq: 0, body: .contact(owner)).encode()
+        var sixteen = owner
+        sixteen.owner = nil
+        XCTAssertEqual(try Frame.decode(seventeen, version: 16).body, .contact(sixteen))
+        XCTAssertEqual(try Frame.decode(seventeen).body, .contact(owner))
+        XCTAssertTrue(owner.isOwner)
+        // An owner flag on a contact with no `wake` is written after a `wake` of 0.
+        XCTAssertEqual(
+            try Frame(seq: 0, body: .contact(Contact(address: bob, session: 0, name: "", owner: 0))).encode().count, 39)
+
+        let me = NodeSelf(
+            address: ada, role: 1, region: "EU868", power: 14, time: 0, cards: 0, cardName: "", most: 0, pairing: 1,
+            locked: 1)
+        let locked = try Frame(seq: 0, body: .nodeSelf(me)).encode()
+        var unlocked = me
+        unlocked.locked = nil
+        XCTAssertEqual(try Frame.decode(locked, version: 16).body, .nodeSelf(unlocked))
+        XCTAssertEqual(try Frame.decode(locked).body, .nodeSelf(me))
     }
 
     /// Turning the node off is version 9's: a request with no fields, which a client sends
@@ -444,12 +487,16 @@ final class CompanionVectorTests: XCTestCase {
             case 7: return .set(.receiver(u8("value")))
             case 8: return .set(.wake(u16("value")))
             case 9: return .set(.listen(u8("value")))
+            case 10: return .set(.lock(u8("value")))
             default: throw DecodeError.undefined
             }
         case "SEND": return .send(ref: u32("ref"), to: addr("to"), text: str("text"))
         case "READ": return .read(through: u32("through"))
         case "FORGET": return .forget(contact: addr("contact"), through: u32("through"))
         case "FORGET_GROUP": return .forgetGroup(group: gid("group"), through: u32("through"))
+        case "MANAGE": return .manage(ref: u32("ref"), to: addr("to"), request: f["request"]!.bytes)
+        case "OWNER": return .owner(address: addr("address"), owner: u8("owner"))
+        case "RESTART": return .restart
         case "SAVE_CONTACT": return .saveContact(address: addr("address"), name: str("name"))
         case "REMOVE_CONTACT": return .removeContact(address: addr("address"))
         case "END_SESSION": return .endSession(address: addr("address"))
@@ -487,11 +534,12 @@ final class CompanionVectorTests: XCTestCase {
             return .nodeSelf(NodeSelf(
                 address: addr("address"), role: u8("role"), region: str("region"), power: i8("power"), time: u32("time"),
                 cards: f["cards"].map { UInt8($0.int) }, cardName: f["card_name"]?.string,
-                most: f["most"].map { UInt8($0.int) }, pairing: f["pairing"].map { UInt8($0.int) }))
+                most: f["most"].map { UInt8($0.int) }, pairing: f["pairing"].map { UInt8($0.int) },
+                locked: f["locked"].map { UInt8($0.int) }))
         case "CONTACT":
             return .contact(Contact(
                 address: addr("address"), session: u8("session"), name: str("name"),
-                wake: f["wake"].map { UInt16($0.int) }))
+                wake: f["wake"].map { UInt16($0.int) }, owner: f["owner"].map { UInt8($0.int) }))
         case "CONTACT_GONE": return .contactGone(address: addr("address"))
         case "MESSAGE":
             return .message(Message(
@@ -531,6 +579,9 @@ final class CompanionVectorTests: XCTestCase {
                 wake: u16("wake"), listen: u8("listen"), state: u8("state"), keeper: u32("keeper"), retry: u16("retry")))
         case "FORGOTTEN": return .forgotten(contact: addr("contact"), through: u32("through"))
         case "GROUP_FORGOTTEN": return .groupForgotten(group: gid("group"), through: u32("through"))
+        case "MANAGED": return .managed(from: addr("from"), answer: f["answer"]!.bytes)
+        case "OWNER_CHANGED":
+            return .ownerChanged(OwnerChange(from: addr("from"), contact: addr("contact"), owner: u8("owner"), by: u8("by")))
         default: throw DecodeError.undefined
         }
     }

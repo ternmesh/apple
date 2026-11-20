@@ -35,11 +35,12 @@ to work on it alone.
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 16, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 17, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
 | `Sources/TernKit/Connection/Connection.swift` | One connection, the client's half: `HELLO` and the version both speak, one request at a time, counted news, syncing again, and the `PING` that keeps a node from taking the app for gone. No I/O and no clock of its own: a link hands it frames and calls `tick()`. |
+| `Sources/TernKit/Connection/Remote.swift` | A node managed over the mesh (draft/managing.md): each request in a `MANAGE`, its answer read from `MANAGED`, `HELLO` first and again after the node restarts, a request not delivered tried again, and the `PING` that ends a setting's trial, after a node that restarts to apply it can answer. No I/O and no clock of its own, as the connection. |
 | `Sources/TernKit/Connection/Records.swift` | What the node has said it holds, as news leaves it, positions, sharing, cards and the node's own fix included, and the `after` the next sync asks from. |
 | `Sources/TernKit/Connection/RecordsFile.swift` | The records on disk: a short header, then each record as the frame that carried it, but for positions, sharing, cards and the node's own fix, which every sync sends again. The Android app writes the same bytes. |
 | `Sources/TernKit/Connection/Conversations.swift` | The records as conversations, with what is unread; the `through` a `READ` may go to without marking another conversation's; and what is new enough to notify of. |
@@ -122,7 +123,7 @@ that its address, contacts, groups and messages go for good and that it must be 
 the node answers, the app forgets it and everything it kept of it, and asks the user to remove the
 node in the system's Bluetooth settings too, which an app cannot do.
 
-It speaks version 16 of the companion protocol, and any earlier version a node speaks. A chat can be
+It speaks version 17 of the companion protocol, and any earlier version a node speaks. A chat can be
 deleted from a node of version 16 or later (`FORGET`, `FORGET_GROUP`), from its menu, or by swiping
 it or from its context menu in the list. The app asks first, saying that its messages go from the
 node and from every phone or computer connected to it, for good, and that any not yet delivered
@@ -130,6 +131,19 @@ will not be sent, and deletes only as far as the last message it showed. Leaving
 removing a contact offer to delete the chat too, deleting it first. When any client deletes a chat,
 the node tells every client (`FORGOTTEN`, `GROUP_FORGOTTEN`), at once or at its next sync, and each
 removes those messages and their notifications. The contact, its session and the group are kept.
+
+From a node of version 17, a contact can be made an owner of the user's node (`OWNER`), from its
+menu in People or in its chat, once the app has said that an owner can change the node's settings
+and who it takes from anywhere on the mesh; People marks owners. A contact's menu also offers to
+manage their node, over the mesh, as one of its owners (`MANAGE`): its state from a sync, the
+settings an owner may change there (not its region or its PIN), its Bluetooth lock, which of its
+contacts are owners, and restarting it. Each request goes one at a time, is tried again up to three
+times 15 s apart if it was not delivered, and is waited on for 2 minutes once it was; the screen says
+where it is. A setting changed is on trial for 15 minutes, and the app confirms it with a `PING` at
+once, or 45 s later for a role or a power, which restart the node; until then the screen says it is
+on trial. When a node's owners change, the node tells them (`OWNER_CHANGED`), and the app says who
+was made or is no longer an owner of which node, at the node or over the mesh. The Node tab says
+when the node's own Bluetooth is locked, when only USB or its owners can change it.
 
 When pairing fails, the app says to press the node's button, or turn it off and on (RESET on a board
 with no button), and pair within 3 minutes, or to type the PIN a node with a screen shows: a node
