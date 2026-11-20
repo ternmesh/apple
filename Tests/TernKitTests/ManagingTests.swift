@@ -466,6 +466,7 @@ final class RemoteTests: XCTestCase {
         XCTAssertEqual(remote.reason, 0)
         XCTAssertEqual(remote.wait, 0)
         XCTAssertNil(remote.deliveredAt)
+        XCTAssertNotNil(remote.queuedAt)
         time += 7
         state(remote, id, MessageState.delivered)
         XCTAssertEqual(remote.deliveredAt, time)
@@ -508,6 +509,26 @@ final class RemoteTests: XCTestCase {
 
         // Not delivered at all: waited for longer than `deliveryWait`.
         XCTAssertGreaterThan(wait, Remote.deliveryWait)
+    }
+
+    /// An owner check is a `HELLO` alone, with no sync before it: the contact's wake is what says the
+    /// node sleeps, and when the manager queued it is all there is until the keeper's node wakes.
+    func testACheckOfASleepingNodeUsesTheContactsWake() {
+        let remote = makeRemote()
+        remote.wakeHint = { 300 }
+        remote.greet { _ in }
+        XCTAssertNil(remote.queuedAt)
+        time = 50
+        queue()
+        XCTAssertEqual(remote.queuedAt, 50)
+        XCTAssertNil(remote.progress, "no STATE while the keeper holds it")
+        XCTAssertEqual(
+            Words.manageStep(
+                remote.progress, reason: 0, wait: 0, tries: remote.tries, node: "Hut", sleeps: remote.wakes?.wake,
+                queued: time - remote.queuedAt!),
+            "Held until Hut wakes (every 5 min)…")
+        remote.cancel()
+        XCTAssertNil(remote.queuedAt)
     }
 
     /// The node's own `SLEEP` comes before what is known from elsewhere: one that listens all the
@@ -577,9 +598,19 @@ final class ManagingWordsTests: XCTestCase {
         XCTAssertEqual(delivered(), "Delivered — waiting for Hut's answer")
         XCTAssertEqual(delivered(after: Words.mayBeAsleepAfter - 1), "Delivered — waiting for Hut's answer")
         XCTAssertEqual(delivered(after: Words.mayBeAsleepAfter), "Waiting for Hut. It may be asleep.")
-        XCTAssertEqual(delivered(sleeps: 300), "Held until Hut wakes (every 5 min)")
-        XCTAssertEqual(delivered(sleeps: 300, after: 100), "Held until Hut wakes (every 5 min)")
+        XCTAssertEqual(delivered(sleeps: 300), "Held until Hut wakes (every 5 min)…")
+        XCTAssertEqual(delivered(sleeps: 300, after: 100), "Held until Hut wakes (every 5 min)…")
         XCTAssertEqual(Words.checking("Hut"), "Checking whether you own Hut…")
+
+        // Queued, with no STATE yet: a keeper holding it says nothing until the node wakes.
+        func queued(sleeps: Int? = nil, after: Double?) -> String {
+            Words.manageStep(nil, reason: 0, wait: 0, tries: 1, node: "Hut", sleeps: sleeps, queued: after)
+        }
+        XCTAssertEqual(queued(after: nil), "Asking your node to send it…")
+        XCTAssertEqual(queued(sleeps: 300, after: nil), "Asking your node to send it…", "not yet queued")
+        XCTAssertEqual(queued(sleeps: 300, after: 0), "Held until Hut wakes (every 5 min)…")
+        XCTAssertEqual(queued(after: Words.mayBeAsleepAfter - 1), "Asking your node to send it…")
+        XCTAssertEqual(queued(after: Words.mayBeAsleepAfter), "Waiting for Hut. It may be asleep.")
     }
 
     /// What became of a check or a request, said where the user is.

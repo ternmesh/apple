@@ -105,6 +105,9 @@ public final class Remote {
     public private(set) var wait: UInt16 = 0
     /// When the manager said the request was delivered, by `now`; nil before, and once answered.
     public private(set) var deliveredAt: Double?
+    /// When the manager queued this try (`QUEUED`), by `now`; nil before. A keeper holding it for a
+    /// node that sleeps sends no `STATE` until the node wakes, so this may be all there is to go on.
+    public private(set) var queuedAt: Double?
     /// The request being asked now, and how many times it has been sent.
     public var asking: Body? { inFlight?.pending.body ?? queue.first?.body }
     public var tries: Int { inFlight?.tries ?? 0 }
@@ -442,6 +445,7 @@ public final class Remote {
         reason = 0
         wait = 0
         deliveredAt = nil
+        queuedAt = nil
     }
 
     /// Sends `frame` in a new `MANAGE`: a request tried again goes as a new message, the same frame
@@ -460,6 +464,8 @@ public final class Remote {
             switch result {
             case let .success(.queued(id)):
                 self.inFlight?.id = id
+                self.queuedAt = self.now()
+                self.onChange()
             case .success:
                 break
             case let .failure(failure):

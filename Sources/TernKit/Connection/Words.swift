@@ -238,11 +238,15 @@ public enum Words {
     /// The step a request to the managed node `node` is at, as its `MANAGE`'s `STATE` says: why it
     /// waits, where it went, and how many times it has been sent. Once delivered, a node known to
     /// sleep every `sleeps` seconds is said to be held until it wakes; one not known to, after
-    /// `mayBeAsleepAfter` with no answer (`delivered` seconds since), may be asleep.
+    /// `mayBeAsleepAfter` with no answer (`delivered` seconds since), may be asleep. The same once
+    /// queued (`queued` seconds since) with no `STATE` yet: a keeper holding the request for a node
+    /// that sleeps says nothing until it wakes.
     public static func manageStep(
         _ state: UInt8?, reason: UInt8, wait: UInt16, tries: Int, node: String, sleeps: Int? = nil,
-        delivered: Double = 0
+        delivered: Double = 0, queued: Double? = nil
     ) -> String {
+        let held = sleeps.map { "Held until \(node) wakes (every \(duration(UInt32($0))))…" }
+        let mayBeAsleep = "Waiting for \(node). It may be asleep."
         let again = tries > 1 ? " (try \(tries) of \(Remote.tries))" : ""
         let step: String
         switch state {
@@ -254,15 +258,22 @@ public enum Words {
             }
         case MessageState.sent?: step = "Sent over the mesh…"
         case MessageState.delivered?:
-            if let sleeps {
-                step = "Held until \(node) wakes (every \(duration(UInt32(sleeps))))"
+            if let held {
+                step = held
             } else if delivered >= mayBeAsleepAfter {
-                step = "Waiting for \(node). It may be asleep."
+                step = mayBeAsleep
             } else {
                 step = "Delivered — waiting for \(node)'s answer"
             }
         case MessageState.notDelivered?: step = "Not delivered yet"
-        default: step = "Asking your node to send it…"
+        default:
+            if queued != nil, let held {
+                step = held
+            } else if let queued, queued >= mayBeAsleepAfter {
+                step = mayBeAsleep
+            } else {
+                step = "Asking your node to send it…"
+            }
         }
         return step + again
     }

@@ -192,13 +192,15 @@ final class ManagedNode: ObservableObject {
         } else if remote.asking != nil {
             working = Words.manageStep(
                 remote.progress, reason: remote.reason, wait: remote.wait, tries: remote.tries, node: name(),
-                sleeps: remote.wakes?.wake, delivered: remote.deliveredAt.map { now() - $0 } ?? 0)
+                sleeps: remote.wakes?.wake, delivered: remote.deliveredAt.map { now() - $0 } ?? 0,
+                queued: remote.queuedAt.map { now() - $0 })
         } else {
             working = nil
         }
-        // Said only when something says the node sleeps, and only before its answer is on its way.
+        // Said only when something says the node sleeps, and only before its answer is on its way,
+        // and not twice: once queued with no news, the step says it is held.
         if remote.asking != nil, remote.settleEnds == nil, remote.progress != MessageState.delivered,
-           let w = remote.wakes {
+           remote.progress != nil || remote.queuedAt == nil, let w = remote.wakes {
             asleep = Words.asleep(name(), wake: w.wake)
         } else {
             asleep = nil
