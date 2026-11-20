@@ -56,7 +56,7 @@ struct PeopleView: View {
                         .contextMenu {
                             Button("Rename") { rename(c) }
                             Button("Show Code") { showing = c }
-                            ShareLink(item: Sharing.link(c.address))
+                            ShareLink(item: Sharing.tappableLink(c.address))
                             Button("Copy Address") { copyToClipboard(Sharing.text(c.address)) }
                             if model.speaksManaging {
                                 ManageMenuItems(

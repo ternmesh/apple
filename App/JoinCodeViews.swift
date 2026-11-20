@@ -24,10 +24,13 @@ struct JoinCodeSheet: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                    Text(link).font(.caption.monospaced()).textSelection(.enabled)
+                    // The QR code holds the link as the node wrote it, upper-case; as text it is
+                    // lower-case, so that tapping it where it is sent opens the app.
+                    let tappable = JoinCode.tappable(link) ?? link
+                    Text(tappable).font(.caption.monospaced()).textSelection(.enabled)
                     HStack {
-                        Button("Copy") { copyToClipboard(link) }
-                        ShareLink(item: link)
+                        Button("Copy") { copyToClipboard(tappable) }
+                        ShareLink(item: tappable)
                     }
                 } else {
                     Text("Anyone who sees this code, or is sent it, can join \(shownName) and read every message in it, from before as well as after. It can't be taken back, so show it only to people you would invite.")

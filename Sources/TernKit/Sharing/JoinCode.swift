@@ -16,9 +16,24 @@ public struct JoinCode: Equatable, Sendable {
     /// The link's start: the code follows it in base32.
     public static let link = "HTTPS://TERNMESH.ORG/G#"
 
+    /// The start of the same link as text to tap: lower-case, so that tapping it opens the app, as
+    /// an upper-case host or path opens the browser. Every reader takes either case.
+    public static let tappableLink = "https://ternmesh.org/g#"
+
     private static let secretLength = 16
     private static let codeMin = secretLength + 2
     private static let codeMax = codeMin + Companion.nameMax
+
+    /// A join code's link, as the node wrote it, as text to send, copy or tap: its start lower-case
+    /// and the code after the `#` as it was. Nil for text that does not start as a join code does.
+    public static func tappable(_ link: String) -> String? {
+        let bytes = Array(link.utf8)
+        let start = Array(self.link.utf8)
+        guard link.unicodeScalars.allSatisfy(\.isASCII), bytes.count >= start.count,
+              bytes[..<start.count].map(Sharing.upper) == start
+        else { return nil }
+        return tappableLink + String(decoding: bytes[start.count...], as: UTF8.self)
+    }
 
     /// The group a join code is for, and its name, or nil: the scheme, host and `G` each in either
     /// case, and the base32 in either case, where either case is ASCII's, and nothing else, a check

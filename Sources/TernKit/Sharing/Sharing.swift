@@ -6,6 +6,11 @@ public enum Sharing {
     /// The link's start: the address follows it in base32.
     public static let link = "HTTPS://TERNMESH.ORG/A/"
 
+    /// The start of the same link as text to tap: lower-case, because a phone opens the app for a
+    /// link only when its host, and the path the site names, are as the site writes them; upper-case
+    /// it opens the browser. Every reader takes the scheme, host and `A` in either case.
+    public static let tappableLink = "https://ternmesh.org/a/"
+
     private static let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".utf8) // RFC 4648, section 6
     private static let base32Length = 52
     private static let shortCodeLabel = Array("tern short code".utf8)
@@ -22,9 +27,13 @@ public enum Sharing {
     /// The link a QR code holds, all of it in the code's alphanumeric set.
     public static func link(_ address: Address) -> String { link + base32(address.bytes) }
 
+    /// The link as text to send, copy or tap: the same link with its start lower-case, so that
+    /// tapping it opens the app. The base32 stays upper-case, as it reads back the same either way.
+    public static func tappableLink(_ address: Address) -> String { tappableLink + base32(address.bytes) }
+
     /// The address in a link or in the text form, or nil for anything else. Either case is ASCII's:
     /// a character outside ASCII is refused, even one a case mapping would turn into a letter, so
-    /// that every address has exactly one link.
+    /// that every address has exactly one link, however it is cased.
     public static func read(_ text: String) -> Address? {
         guard !text.isEmpty, text.unicodeScalars.allSatisfy(\.isASCII) else { return nil }
         let bytes = Array(text.utf8)

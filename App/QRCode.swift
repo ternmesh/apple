@@ -81,7 +81,7 @@ struct CodeSheet: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                ShareLink(item: Sharing.link(address))
+                ShareLink(item: Sharing.tappableLink(address))
             }
             .padding()
             .navigationTitle(title)

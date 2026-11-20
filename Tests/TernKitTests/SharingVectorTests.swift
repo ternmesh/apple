@@ -31,6 +31,21 @@ final class SharingVectorTests: XCTestCase {
         }
     }
 
+    func testTappableLinkIsTheLinkLowerCasedButItsBase32AndReadsBack() {
+        let cases = v["cases"]!.array
+        XCTAssertFalse(cases.isEmpty)
+        for c in cases {
+            let a = Address(c["address"]!.bytes)!
+            let base32 = c["base32"]!.string
+            let tappable = Sharing.tappableLink(a)
+            XCTAssertEqual(tappable, "https://ternmesh.org/a/" + base32)
+            XCTAssertEqual(tappable.uppercased(), Sharing.link(a))
+            XCTAssertEqual(Sharing.read(tappable), a, tappable)
+            XCTAssertEqual(URL(string: tappable)?.host, "ternmesh.org")
+            XCTAssertEqual(URL(string: tappable).flatMap { Sharing.read($0.absoluteString) }, a)
+        }
+    }
+
     func testRefusedReadsNothing() {
         for r in v["refused"]!.array { XCTAssertNil(Sharing.read(r.string), r.string) }
     }
