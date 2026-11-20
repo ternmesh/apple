@@ -1,6 +1,8 @@
 // One conversation: its messages and invites oldest first, what the user sent and where it is,
 // and the composer. What can be done with the contact or the group is in the toolbar, deleting the
 // chat among it, and a line under the title says when the node shares the user's location with them.
+// From a node of version 18, a line under each message says how it went, and a contact's menu traces
+// the way to them; any node's offers a range test to them.
 
 import SwiftUI
 import TernKit
@@ -27,6 +29,9 @@ struct ChatView: View {
     @State private var checking = false
     /// A contact the user asked to make an owner of their node, until they confirm.
     @State private var owning: Contact?
+    /// The trace to the contact's node, and the range test to it.
+    @State private var tracing = false
+    @State private var rangeTesting = false
 
     private static let end = "end"
 
@@ -110,6 +115,12 @@ struct ChatView: View {
         }
         .navigationDestination(isPresented: $checking) {
             if case let .contact(address) = peer { OwnerCheckView(node: model.managed(address)) }
+        }
+        .navigationDestination(isPresented: $tracing) {
+            if case let .contact(address) = peer { TraceView(to: model.records.routingId(of: address)) }
+        }
+        .navigationDestination(isPresented: $rangeTesting) {
+            if case let .contact(address) = peer { RangeTestView(initial: address) }
         }
         .confirmationDialog("End the session?", isPresented: $ending, titleVisibility: .visible) {
             Button("End Session", role: .destructive) {
@@ -262,6 +273,11 @@ struct ChatView: View {
                 Button("End Session", role: .destructive) { ending = true }
             }
             forgetButton(conversation)
+            // How frames go to them: a trace from a node of version 18, which says why not before
+            // it, and a range test from any.
+            Divider()
+            TraceRouteButton(address: address) { tracing = true }
+            Button("Range Test…") { rangeTesting = true }
             // Owners and managing, for a node of version 17: the contact is a node too.
             if model.speaksManaging, let contact {
                 Divider()
@@ -407,6 +423,8 @@ private struct ForgetDialog: ViewModifier {
 struct ItemBubble: View {
     let item: Item
     @EnvironmentObject private var model: NodeModel
+    /// The details of how it went, over the conversation.
+    @State private var details = false
 
     var body: some View {
         HStack {
@@ -427,9 +445,32 @@ struct ItemBubble: View {
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .fill(item.isReceived ? Color.theirs : Color.mine))
                     .foregroundStyle(item.isReceived ? Color.primary : Color.white)
+                    .contextMenu {
+                        if model.speaksRoutes { Button("How It Went") { details = true } }
+                    }
                 footer
+                routeLine
             }
             if item.isReceived { Spacer(minLength: 48) }
+        }
+        .sheet(isPresented: $details) { RouteDetailsSheet(item: item).environmentObject(model) }
+    }
+
+    /// How it went, from a node of version 18: direct or through relays, and how well heard. Tapping
+    /// it says all of it.
+    @ViewBuilder
+    private var routeLine: some View {
+        if let line = RouteWords.line(item, model.records.routes[item.id], records: model.records, names: model.routeNames) {
+            Button { details = true } label: {
+                Text(line)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 4)
+            .accessibilityHint("Shows how it went")
         }
     }
 

@@ -127,6 +127,10 @@ final class NodeModel: ObservableObject {
             if records.contacts != oldValue.contacts || records.routingVersion != oldValue.routingVersion {
                 routingNames = records.routingNames
             }
+            if records.contacts != oldValue.contacts || records.routingVersion != oldValue.routingVersion
+                || records.cards != oldValue.cards || records.me?.address != oldValue.me?.address {
+                routeNames = RouteNames(records, given: relayNames)
+            }
         }
     }
     @Published private(set) var conversations: [Conversation] = []
@@ -147,6 +151,20 @@ final class NodeModel: ObservableObject {
     /// The managed nodes with something asked, a check or a request, shown wherever the user is
     /// until it is over or stopped.
     @Published private(set) var busyManaged: [ManagedNode] = []
+    /// Traces the user began (version 18), by the routing id each is to: the last to each, until
+    /// another. The node keeps none, so none outlives the run or the node.
+    @Published private(set) var traces: [UInt32: TraceRun] = [:]
+    /// The names the user gave routing ids no contact has, relays most often: this device's alone,
+    /// whichever node is chosen, and never sent.
+    @Published private(set) var relayNames: [UInt32: String] = NodeModel.loadRelayNames() {
+        didSet { routeNames = RouteNames(records, given: relayNames) }
+    }
+    /// What the app calls each routing id, as the records and the user's own names have it: worked
+    /// out again only when either changes.
+    @Published private(set) var routeNames = RouteNames(Records())
+    /// The range test, from its start until its screen closes, and whether it is pinging.
+    @Published private(set) var range: RangeTest?
+    @Published private(set) var rangeRunning = false
     /// A managed node whose Manage screen a tapped notification asked for: its chat opens it.
     @Published var manageRequested: Address?
     @Published private(set) var firmware: String?
@@ -276,6 +294,7 @@ final class NodeModel: ObservableObject {
         }
         conversations = records.conversations
         routingNames = records.routingNames
+        routeNames = RouteNames(records, given: relayNames)
         link.makeConnection = { [weak self] id in
             // The records already loaded are the node's, unless the link is opening to another.
             let held = (self?.remembered == id ? self?.records : nil) ?? Self.load(id)
@@ -321,6 +340,9 @@ final class NodeModel: ObservableObject {
             for m in managedNodes.values { m.cancel() }
             managedNodes = [:]
             busyManaged = []
+            // As are its traces and the range test's pings.
+            traces = [:]
+            closeRangeTest()
             chatPath = []
             seen = [:]
             queuedFloor = 0
@@ -393,6 +415,8 @@ final class NodeModel: ObservableObject {
         for m in managedNodes.values { m.cancel() }
         managedNodes = [:]
         busyManaged = []
+        traces = [:]
+        closeRangeTest()
         chatPath = []
         seen = [:]
         queuedFloor = 0
@@ -649,6 +673,199 @@ final class NodeModel: ObservableObject {
             post(identifier: "owner-\(UUID().uuidString)", peer: .contact(change.from), on: node,
                  subtitle: "Owners changed", body: text)
         }
+    }
+
+    // MARK: How messages went, traces and the range test
+
+    /// Whether the node says how each message went and traces (version 18). Before it, no message
+    /// has a route line, and Trace says the firmware needs updating.
+    var speaksRoutes: Bool { (agreed ?? 0) >= 18 }
+
+    /// Traces the way frames go to the node whose routing id is `to`, and back: its contact's, a
+    /// neighbour's, or any other. Another to the same id while one is out is not asked: the node
+    /// would refuse it.
+    func trace(_ to: UInt32) {
+        guard speaksRoutes, traces[to]?.isRunning != true else { return }
+        guard let c = link.connection else {
+            traces[to] = TraceRun(to: to, failed: .closed)
+            return
+        }
+        traces[to] = TraceRun(to: to)
+        c.submit(.trace(ref: UInt32.random(in: 1...UInt32.max), to: to)) { [weak self] result in
+            guard let self, var run = self.traces[to], run.isRunning, run.id == nil else { return }
+            switch result {
+            case let .success(.queued(id)): run.id = id
+            case .success: run.failed = .noAnswer  // an answer that is not QUEUED: no trace began
+            case let .failure(f):
+                if f == .refused(code: ErrorCode.locked) { self.bluetoothLocked = true }
+                run.failed = f
+            }
+            self.traces[to] = run
+        }
+    }
+
+    /// A trace's `STATE`, which is no message's, and its `TRACED`, which may be of one another
+    /// client began.
+    private func traceNews(_ body: Body) {
+        switch body {
+        case let .state(s):
+            guard let run = traces.values.first(where: { $0.id == s.id && $0.isRunning }) else { return }
+            traces[run.to]?.state = s.state
+            traces[run.to]?.reason = s.reason
+            traces[run.to]?.wait = s.wait
+        case let .traced(t):
+            let mine = traces[t.to]
+            if let mine, mine.id == t.id || (mine.id == nil && mine.isRunning) {
+                traces[t.to]?.id = t.id
+                traces[t.to]?.traced = t
+            } else if mine == nil || mine?.isRunning == false {
+                traces[t.to] = TraceRun(to: t.to, id: t.id, traced: t)
+            }
+        default:
+            break
+        }
+    }
+
+    /// Gives the routing id `id` the name the app shows it by, on this device alone, for a relay
+    /// or any node no contact names; an empty name takes it away. Nothing is sent.
+    func nameRelay(_ id: UInt32, _ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        relayNames[id] = trimmed.isEmpty ? nil : String(trimmed.prefix(Companion.nameMax))
+        let kept = Dictionary(uniqueKeysWithValues: relayNames.map { (Words.routingId($0.key), $0.value) })
+        UserDefaults.standard.set(kept, forKey: Self.relayNamesKey)
+    }
+
+    private static let relayNamesKey = "org.ternmesh.tern.relayNames"
+
+    private static func loadRelayNames() -> [UInt32: String] {
+        let kept = UserDefaults.standard.dictionary(forKey: relayNamesKey) as? [String: String] ?? [:]
+        var names: [UInt32: String] = [:]
+        for (key, name) in kept where key.count == 8 {
+            if let id = UInt32(key, radix: 16) { names[id] = name }
+        }
+        return names
+    }
+
+    /// The phone's own position while a range test runs, for its log: nothing of it goes to the node.
+    private lazy var rangeLocation: LocationFeed = {
+        let feed = LocationFeed()
+        feed.onFix = { [weak self] fix in self?.takeRangeFix(fix) }
+        feed.onAuthorization = { [weak self] in
+            guard let self else { return }
+            self.locationAllowed = feed.isAllowed
+            if self.rangeRunning { feed.start(fine: true) }
+        }
+        return feed
+    }()
+    private var rangeFix: CLLocation?
+    private var rangeTimer: Timer?
+
+    /// Whether the range test's log can say where the phone was.
+    var rangeCanLocate: Bool { location.isAllowed }
+
+    /// Asks for the phone's location for the range test's log: the system asks once, and after
+    /// that only Settings can change it.
+    func allowRangeLocation() {
+        if location.isUndecided {
+            rangeLocation.ask()
+        } else {
+            #if os(iOS)
+            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            #else
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices") {
+                NSWorkspace.shared.open(url)
+            }
+            #endif
+        }
+    }
+
+    /// Starts a range test to `to`: a numbered message every `interval` seconds, the first at once,
+    /// each logged with where the phone is, until `stopRangeTest`. Whatever the link does
+    /// meanwhile, it goes on: a ping due while the node is not connected is logged as not sent, and
+    /// one the node did not answer for is found by its text once a sync shows it went.
+    func startRangeTest(to: Address, interval: Double) {
+        rangeTimer?.invalidate()
+        range = RangeTest(to: to, interval: interval, startedAt: Date().timeIntervalSince1970)
+        rangeRunning = true
+        rangeFix = nil
+        if location.isUndecided { rangeLocation.ask() }
+        rangeLocation.start(fine: true)
+        rangeAwake = true
+        applyAwake()
+        rangePing()
+    }
+
+    /// Stops pinging; the log stays, to look at and export, until the screen closes.
+    func stopRangeTest() {
+        rangeTimer?.invalidate()
+        rangeTimer = nil
+        rangeRunning = false
+        rangeLocation.stop()
+        rangeFix = nil
+        rangeAwake = false
+        applyAwake()
+    }
+
+    /// The range test's screen closed: the test and its log go.
+    func closeRangeTest() {
+        stopRangeTest()
+        range = nil
+    }
+
+    private func rangePing() {
+        guard rangeRunning, var t = range else { return }
+        let ready = canWrite && link.connection != nil
+        let p = t.next(
+            at: Date().timeIntervalSince1970, fix: phoneFix(), after: max(records.greatest, queuedFloor),
+            unsent: ready ? nil : .notConnected)
+        range = t
+        if ready, let c = link.connection {
+            let test = t.startedAt
+            c.sendMessage(p.text, to: t.to) { [weak self] result in
+                // Only into the test it was sent for: not one started since.
+                guard let self, var t = self.range, t.startedAt == test else { return }
+                switch result {
+                case let .success(.queued(id)):
+                    self.queuedFloor = max(self.queuedFloor, id)
+                    t.queued(p.n, id: id)
+                case .failure(.refused), .failure(.unsupported), .failure(.invalid), .success:
+                    t.unsent(p.n, .refused)
+                case .failure:
+                    t.unsent(p.n, .unanswered)
+                }
+                self.range = t
+            }
+        }
+        scheduleRangePing()
+    }
+
+    private func scheduleRangePing() {
+        rangeTimer?.invalidate()
+        guard rangeRunning, let t = range else { return }
+        let delay = min(max(0, t.nextAt - Date().timeIntervalSince1970), t.interval)
+        rangeTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.rangePing() }
+        }
+    }
+
+    /// A fix the range test's feed gives: a much worse one just after a better one is not taken
+    /// for being newer.
+    private func takeRangeFix(_ fix: CLLocation) {
+        if let old = rangeFix, old.horizontalAccuracy > 0, fix.horizontalAccuracy > old.horizontalAccuracy * 2,
+           fix.timestamp.timeIntervalSince(old.timestamp) < 20 {
+            return
+        }
+        rangeFix = fix
+    }
+
+    /// The newest fix, if it is recent enough to say where a ping went from; nil for none.
+    private func phoneFix() -> PhoneFix? {
+        guard let f = rangeFix ?? rangeLocation.last else { return nil }
+        let age = max(0, Int(Date().timeIntervalSince(f.timestamp)))
+        guard age <= 120 else { return nil }
+        return PhoneFix(
+            lat: f.coordinate.latitude, lon: f.coordinate.longitude,
+            accuracy: f.horizontalAccuracy > 0 ? f.horizontalAccuracy : nil, age: age)
     }
 
     // MARK: Forgetting
@@ -1331,8 +1548,17 @@ final class NodeModel: ObservableObject {
     /// Keeps the screen on while the node is sent its firmware: Bluetooth goes on in the
     /// background, but more slowly, and a minute's lock is a while for a few minutes' update.
     private func keepAwake(_ on: Bool) {
+        updatingAwake = on
+        applyAwake()
+    }
+
+    /// Whether an update, or a range test, keeps the screen on.
+    private var updatingAwake = false
+    private var rangeAwake = false
+
+    private func applyAwake() {
         #if os(iOS)
-        UIApplication.shared.isIdleTimerDisabled = on
+        UIApplication.shared.isIdleTimerDisabled = updatingAwake || rangeAwake
         #endif
     }
 
@@ -1381,6 +1607,11 @@ final class NodeModel: ObservableObject {
             case .state, .managed: for m in managedNodes.values { m.take(body) }
             default: break
             }
+            // A trace's: where it is, or how it ended (version 18).
+            switch body {
+            case .state, .traced: traceNews(body)
+            default: break
+            }
             noteArrival(body)
             take()
             scheduleSave()
@@ -1409,6 +1640,8 @@ final class NodeModel: ObservableObject {
         if outgoing.contains(where: { $0.status == .unanswered && records.holdsSent($0.text, to: $0.peer, after: $0.after) }) {
             outgoing.removeAll { $0.status == .unanswered && records.holdsSent($0.text, to: $0.peer, after: $0.after) }
         }
+        // A range ping the node did not answer for, which a sync now shows it holds.
+        if var t = range, t.resolve(records) { range = t }
         markRead()
     }
 

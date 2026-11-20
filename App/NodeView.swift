@@ -25,6 +25,9 @@ struct NodeView: View {
     @State private var adding: Card?
     /// Finding and connecting to another node, over the dashboard.
     @State private var switching = false
+    /// The neighbour traced to, and the one the user is naming on this device.
+    @State private var tracing: UInt32?
+    @State private var naming: UInt32?
 
     /// The profiles a node is set to by name, each with where it is for. A node refuses one it does
     /// not have.
@@ -235,7 +238,12 @@ struct NodeView: View {
     private var pages: some View {
         SwiftUI.Section {
             NavigationLink {
+                // Out here, not on its section: in a form's lazy list they would go unseen.
                 page("Nearby Nodes") { neighbours }
+                    .navigationDestination(isPresented: Binding(get: { tracing != nil }, set: { if !$0 { tracing = nil } })) {
+                        if let tracing { TraceView(to: tracing) }
+                    }
+                    .namesRelay($naming)
             } label: {
                 SettingRow(
                     title: "Nearby Nodes", symbol: "waveform.path.ecg", tint: Color(hex: 0x0F766E),
@@ -717,8 +725,9 @@ struct NodeView: View {
     }
 
     /// The nodes the node hears. Each is named, if it can be, by a contact's routing id, else by a
-    /// card the node holds, as the claim it is, which offers to add them as a contact as People's Nearby
-    /// does; one with neither stays a routing id.
+    /// name the user gave it on this device, else by a card the node holds, as the claim it is,
+    /// which offers to add them as a contact as People's Nearby does; one with none stays a routing
+    /// id, and tapping it names it. From a node of version 18, each has Trace.
     @ViewBuilder
     private var neighbours: some View {
         let list = model.records.neighbours.values.sorted { $0.heard < $1.heard }
@@ -728,53 +737,88 @@ struct NodeView: View {
                 Text("The node hears no other nodes yet.").foregroundStyle(.secondary)
             }
             ForEach(list, id: \.routingId) { n in
-                // A contact's name, when the routing id is one of theirs.
-                if let name = model.routingNames[n.routingId] {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(name)
-                        Text(Words.routingId(n.routingId)).font(.caption.monospaced()).foregroundStyle(.secondary)
-                        heard(n)
-                    }
-                } else if let card = cards[n.routingId] {
-                    Button {
-                        adding = card
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(Words.cardName(card.name))
-                                    .foregroundStyle(card.name.isEmpty ? Color.secondary : Color.primary)
-                                HStack {
-                                    Text(Sharing.shortCode(card.address))
-                                    Text(Words.routingId(n.routingId))
-                                }
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                heard(n)
-                            }
-                            Spacer()
-                            Image(systemName: "person.badge.plus").foregroundStyle(Color.accentColor)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.borderless)
-                    .foregroundStyle(Color.primary)
-                    .accessibilityHint("Adds them as a contact")
-                } else {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(Words.routingId(n.routingId)).font(.body.monospaced())
-                        Text("No card heard from this node.").font(.caption).foregroundStyle(.secondary)
-                        heard(n)
+                HStack {
+                    neighbour(n, cards: cards)
+                    if model.speaksRoutes {
+                        Button("Trace") { tracing = n.routingId }
+                            .buttonStyle(.borderless)
+                            .disabled(!model.isReady)
                     }
                 }
             }
         } footer: {
-            Text("Bars show how clearly your node hears each one: four is strong, one is at the edge of range.")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Bars show how clearly your node hears each one: four is strong, one is at the edge of range.")
+                // A leaf answers traces only from a node it shares a session with: said before Trace is pressed.
+                if model.speaksRoutes, list.contains(where: { model.records.isLeafWithoutSession($0.routingId) }) {
+                    Text(RouteWords.leafHint)
+                }
+            }
         }
         .sheet(item: $adding) { c in
             AddContactSheet(
                 text: Sharing.text(c.address), name: c.name,
                 nameNote: c.name.isEmpty ? nil : "Their card says “\(c.name)”. Save them under any name you like.")
                 .environmentObject(model)
+        }
+    }
+
+    @ViewBuilder
+    private func neighbour(_ n: Neighbour, cards: [UInt32: Card]) -> some View {
+        // A contact's name, when the routing id is one of theirs.
+        if let name = model.routingNames[n.routingId] {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                Text(Words.routingId(n.routingId)).font(.caption.monospaced()).foregroundStyle(.secondary)
+                heard(n)
+            }
+        } else if let card = cards[n.routingId], model.relayNames[n.routingId] == nil {
+            Button {
+                adding = card
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(Words.cardName(card.name))
+                            .foregroundStyle(card.name.isEmpty ? Color.secondary : Color.primary)
+                        HStack {
+                            Text(Sharing.shortCode(card.address))
+                            Text(Words.routingId(n.routingId))
+                        }
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        heard(n)
+                    }
+                    Spacer()
+                    Image(systemName: "person.badge.plus").foregroundStyle(Color.accentColor)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(Color.primary)
+            .accessibilityHint("Adds them as a contact")
+        } else {
+            // Named on this device, or not at all: tapping it names it.
+            Button {
+                naming = n.routingId
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let given = model.relayNames[n.routingId] {
+                            Text(given)
+                            Text(Words.routingId(n.routingId)).font(.caption.monospaced()).foregroundStyle(.secondary)
+                        } else {
+                            Text(Words.routingId(n.routingId)).font(.body.monospaced())
+                            Text("No card heard from this node.").font(.caption).foregroundStyle(.secondary)
+                        }
+                        heard(n)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(Color.primary)
+            .accessibilityHint("Names this node on this device")
         }
     }
 
