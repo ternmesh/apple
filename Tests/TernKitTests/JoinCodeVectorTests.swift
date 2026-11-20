@@ -34,6 +34,25 @@ final class JoinCodeVectorTests: XCTestCase {
         }
     }
 
+    func testTappableJoinCodeIsTheLinkWithItsStartLowerCasedAndReadsBack() {
+        let cases = v["join_codes"]!.array
+        XCTAssertFalse(cases.isEmpty)
+        for c in cases {
+            let link = c["link"]!.string
+            let code = JoinCode(group: JoinCode.groupID(c["group_secret"]!.bytes), name: c["name"]!.string)
+            let tappable = JoinCode.tappable(link)!
+            XCTAssertTrue(tappable.hasPrefix(JoinCode.tappableLink), tappable)
+            XCTAssertEqual(tappable.dropFirst(JoinCode.tappableLink.count), link.dropFirst(JoinCode.link.count))
+            XCTAssertEqual(JoinCode.read(tappable), code, tappable)
+            XCTAssertEqual(JoinCode.tappable(tappable), tappable)
+            XCTAssertEqual(URL(string: tappable).flatMap { JoinCode.read($0.absoluteString) }, code)
+            for r in c["reads"]!.array { XCTAssertEqual(JoinCode.tappable(r.string).flatMap(JoinCode.read), code, r.string) }
+        }
+        XCTAssertNil(JoinCode.tappable("HTTPS://TERNMESH.ORG/A/23IV7K54ILHFMF2KINR6OV2DPJFHXL2CDNUQZKREM5XT6TYXZGLA"))
+        XCTAssertNil(JoinCode.tappable("httpſ://ternmesh.org/g#ytcmjrgeytcmjrgeytcmjrgeyququ"))
+        XCTAssertNil(JoinCode.tappable(""))
+    }
+
     func testAnythingElseIsNoJoinCode() {
         for c in v["bad_join_codes"]!.array { XCTAssertNil(JoinCode.read(c["link"]!.string), c["why"]!.string) }
         XCTAssertNil(JoinCode.read(""))

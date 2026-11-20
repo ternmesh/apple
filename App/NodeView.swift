@@ -388,7 +388,7 @@ struct NodeView: View {
                 .frame(maxWidth: .infinity)
                 .textSelection(.enabled)
             HStack {
-                ShareLink(item: Sharing.link(me.address)) { Label("Share Link", systemImage: "square.and.arrow.up") }
+                ShareLink(item: Sharing.tappableLink(me.address)) { Label("Share Link", systemImage: "square.and.arrow.up") }
                     .buttonStyle(.borderedProminent)
                 Button { copyToClipboard(Sharing.text(me.address)) } label: { Label("Copy", systemImage: "doc.on.doc") }
                     .buttonStyle(.bordered)
