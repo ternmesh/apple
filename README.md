@@ -35,13 +35,13 @@ to work on it alone.
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 17, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 18, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
 | `Sources/TernKit/Connection/Connection.swift` | One connection, the client's half: `HELLO` and the version both speak, one request at a time, counted news, syncing again, and the `PING` that keeps a node from taking the app for gone. No I/O and no clock of its own: a link hands it frames and calls `tick()`. |
 | `Sources/TernKit/Connection/Remote.swift` | A node managed over the mesh (draft/managing.md): each request in a `MANAGE`, its answer read from `MANAGED`, `HELLO` first and again after the node restarts, a request not delivered tried again, waited for through the wake of a node that sleeps, stopped at `ERROR` 15, and the `PING` that ends a setting's trial, after a node that restarts to apply it can answer. No I/O and no clock of its own, as the connection. |
-| `Sources/TernKit/Connection/Records.swift` | What the node has said it holds, as news leaves it, positions, sharing, cards and the node's own fix included, and the `after` the next sync asks from. |
+| `Sources/TernKit/Connection/Records.swift` | What the node has said it holds, as news leaves it, positions, sharing, cards, the node's own fix and how each message went included, and the `after` the next sync asks from. |
 | `Sources/TernKit/Connection/RecordsFile.swift` | The records on disk: a short header, then each record as the frame that carried it, but for positions, sharing, cards and the node's own fix, which every sync sends again. The Android app writes the same bytes. |
 | `Sources/TernKit/Connection/Conversations.swift` | The records as conversations, with what is unread; the `through` a `READ` may go to without marking another conversation's; and what is new enough to notify of. |
 | `Sources/TernKit/Connection/RoutingNames.swift` | An address's routing id as the node's version makes it, from the address itself before version 14 and from the key blinded from it after, kept once worked out; and the contacts' names by theirs: what a neighbour or a group message's writer shows as, when it is a contact. |
@@ -49,6 +49,8 @@ to work on it alone.
 | `Sources/TernKit/Connection/Cards.swift` | Who is about as a person reads it: the cards held, most recently heard first, each counted on from when its record came; the name a node's cards may carry; a card's name shown as its sender's claim. |
 | `Sources/TernKit/Connection/Owned.swift` | The nodes this client's node is an owner of, or not, as each last said by notice or answer, and as kept between runs. |
 | `Sources/TernKit/Connection/Words.swift` | The protocol's numbers in words: states, reasons, refusals, roles, how an update ended. |
+| `Sources/TernKit/Connection/RouteWords.swift` | How a message went and what a trace found, in words (version 18): the line under a message, the details behind it, a trace's result and where one is, and what each routing id is called. The Android app's words. |
+| `Sources/TernKit/Connection/RangeTest.swift` | A range test's log: numbered pings, what each became, read from the records whenever it is asked, and the CSV it exports, with the Android app's columns. |
 | `Sources/TernKit/Update/Updater.swift` | One firmware image sent to a node: `UPDATE_BEGIN`, on from the offset the node gives, `UPDATE_DATA` a chunk at a time, `UPDATE_END`, and going on after the link drops. Through the connection, with no I/O of its own. |
 | `Sources/TernKit/Update/BootloaderUpdater.swift` | A DFU package given to a node by its bootloader: `UPDATE_BOOTLOADER`, the bootloader found by its service, the package, and once more after a bootloader left mid-session. |
 | `Sources/TernKit/Update/DFU.swift` | Nordic's legacy DFU, as an nRF52840 node's bootloader speaks it: the package's init packet and application, and the client, through a transport of three calls (write the control point, write a packet, wait for a notification), so that a bootloader played by hand tests it. |
@@ -59,9 +61,9 @@ to work on it alone.
 | `Sources/TernKit/Update/SHA256.swift` | SHA-256, for an image's digest and routing ids: TernKit's own, so that it needs nothing of Apple's. |
 | `Sources/TernKit/Bluetooth/BluetoothLink.swift` | Core Bluetooth: scanning, connecting, pairing, the MTU, a frame to each write and notification, reconnecting to the remembered node, and restoring in the background. Built only where Core Bluetooth is. |
 | `Sources/TernKit/Bluetooth/BootloaderLink.swift` | Core Bluetooth for a node's bootloader: found by the DFU service, on a central of its own, and the DFU client's transport, each packet written without a response once the link can take it. |
-| `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, the firmware it downloads and sends, and the phone's position given to the node while it shares, from `LocationFeed`), `Notifications` (a tap or a reply on one), and the screens: Connect (the whole window until a node is chosen, then Switch Node), and the Chats, People (contacts, and who is near), Map and Node tabs, the node's dashboard with a screen for each thing about it, with the share sheet. `Design` holds what they share: avatars, signal bars and the node's status pill. The map is MapKit's own view (`PositionMap`), which draws a cell before iOS 17 and macOS 14. |
+| `App/` | The app in SwiftUI: `NodeModel` (the link, the connection and the records, kept on disk, the firmware it downloads and sends, and the phone's position given to the node while it shares, from `LocationFeed`), `Notifications` (a tap or a reply on one), and the screens: Connect (the whole window until a node is chosen, then Switch Node), and the Chats, People (contacts, and who is near), Map and Node tabs, the node's dashboard with a screen for each thing about it, with the share sheet; and, in `RouteViews`, how a message went, traces and the range test. `Design` holds what they share: avatars, signal bars and the node's status pill. The map is MapKit's own view (`PositionMap`), which draws a cell before iOS 17 and macOS 14. |
 | `project.yml` | The Xcode project, for XcodeGen: one target for iOS and macOS. |
-| `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange` and `older`, frames of later versions in `unknown_to_older`, the updater as the client in `update`, and the bootloader's connections, `wipe`, and the client of version 12 refused an unsigned update; the signatures in `signatures`, and the routing ids in routing.json's `ids` and `no_ids`; the DFU client against a bootloader played by hand, and the package against ones `adafruit-nrfutil` made (`fixtures/`). The records file, conversations and `READ`'s rule, routing ids against routing.md's vectors; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
+| `Tests/TernKitTests/` | The conformance section of the specification, as a client: the codec against every vector, the connection as the client in `exchange`, `older`, `manage`, `forget` and `route`, frames of later versions in `unknown_to_older`, the updater as the client in `update`, and the bootloader's connections, `wipe`, and the client of version 12 refused an unsigned update; the signatures in `signatures`, and the routing ids in routing.json's `ids` and `no_ids`; the DFU client against a bootloader played by hand, and the package against ones `adafruit-nrfutil` made (`fixtures/`). The records file, conversations and `READ`'s rule, routing ids against routing.md's vectors; SHA-256 against FIPS 180-4, the manifest and Semantic Versioning. |
 
 The vectors' `group_ids` are run against the join code reader, which works out the id of the
 group a code is for, so that the app can say whether the node holds it already; `groups.json`'s
@@ -124,7 +126,7 @@ that its address, contacts, groups and messages go for good and that it must be 
 the node answers, the app forgets it and everything it kept of it, and asks the user to remove the
 node in the system's Bluetooth settings too, which an app cannot do.
 
-It speaks version 17 of the companion protocol, and any earlier version a node speaks. A chat can be
+It speaks version 18 of the companion protocol, and any earlier version a node speaks. A chat can be
 deleted from a node of version 16 or later (`FORGET`, `FORGET_GROUP`), from its menu, or by swiping
 it or from its context menu in the list. The app asks first, saying that its messages go from the
 node and from every phone or computer connected to it, for good, and that any not yet delivered
@@ -157,6 +159,24 @@ once, or 45 s later for a role or a power, which restart the node; until then th
 on trial. When a node's owners change, the node tells them (`OWNER_CHANGED`), and the app says who
 was made or is no longer an owner of which node, at the node or over the mesh. The Node tab says
 when the node's own Bluetooth is locked, when only USB or its owners can change it.
+
+From a node of version 18 the app shows how each message went (`ROUTE`), kept with the records
+and across a sync that sends none, and forgotten with its message. Under each message: received,
+"Direct · SNR 6.5 dB" or "2 hops · SNR 4.8 dB", a group message "≤2 hops"; sent, "Sent via
+Hilltop · try 2", then "Delivered via Hilltop · reply 2 hops · 19.6 s" or "Delivered direct · 1.2
+s": a sent message's hops are its acknowledgement's, on the way back. Tapping the line, or How It
+Went in a message's context menu, says every field in words. Trace Route, in a contact's menu, and
+Trace beside each of the node's Nearby Nodes, trace the way to that node (`TRACE`, `TRACED`): where
+the trace is, then how it ended, the hops out and back with names and SNR, and that a trace shows
+how frames went just then and relays can misreport it. A leaf answers a trace only from a node it
+has a secure session with, and the app says so of a neighbour it hears as a leaf, before and after.
+A node no contact names can be named on this device, from a trace or the neighbours; the name is
+never sent. Range Test, in a contact's menu or on the Node tab, sends "range #1", "range #2" and on
+every 30 to 60 s (30 by default), each logged with the device's location, whether it was delivered,
+the hops, SNR, RSSI and round trip of its acknowledgement and the neighbour it first went to, and
+exports the log as CSV, by the share sheet on an iPhone or iPad and to a file on a Mac; on an
+iPhone the screen stays on while it runs. To a node of version 17 there are no route lines, Trace
+says to update the node's firmware, and a range test logs only delivery.
 
 When pairing fails, the app says to press the node's button, or turn it off and on (RESET on a board
 with no button), and pair within 3 minutes, or to type the PIN a node with a screen shows: a node

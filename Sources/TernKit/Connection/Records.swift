@@ -3,7 +3,9 @@
 // is the whole list of contacts, groups, neighbours, positions, sharing and cards, but not of
 // messages; and a sync of version 8 sends a FIX, which replaces the one before it as AIRTIME and
 // POWER do. FORGOTTEN and GROUP_FORGOTTEN take a conversation's items through an id away, at once,
-// in a sync or out of one: the node says so outright, so missed news does not stay it.
+// in a sync or out of one: the node says so outright, so missed news does not stay it, and each
+// with its ROUTE. A ROUTE replaces the one before it for its message (version 18), and a sync that
+// sends none takes none away: a node may keep none across a restart.
 
 /// A message, group message or invite: the three records that share the node's count of `id`s,
 /// and a message's states.
@@ -85,6 +87,10 @@ public struct Records: Equatable, Sendable {
     public var groups: [GroupID: Group] = [:]
     /// Messages, group messages and invites, by `id`.
     public var items: [UInt32: Item] = [:]
+    /// How each message, group message or invite went, by its `id`, as the node's last `ROUTE` for
+    /// it said (version 18). Not every item has one: a node keeps none for one from before it kept
+    /// them, and may keep none across a restart, so a sync that sends none takes none away.
+    public var routes: [UInt32: Route] = [:]
     public var neighbours: [UInt32: Neighbour] = [:]
     /// Positions the node holds from contacts, and from members of groups. Never one whose
     /// precision is 0: that record says there is none.
@@ -128,6 +134,7 @@ public struct Records: Equatable, Sendable {
 
     public static func == (a: Records, b: Records) -> Bool {
         a.me == b.me && a.contacts == b.contacts && a.groups == b.groups && a.items == b.items
+            && a.routes == b.routes
             && a.neighbours == b.neighbours && a.positions == b.positions && a.groupPositions == b.groupPositions
             && a.sharing == b.sharing && a.groupSharing == b.groupSharing && a.cards == b.cards
             && a.airtime == b.airtime && a.power == b.power && a.fix == b.fix && a.sleep == b.sleep
@@ -166,6 +173,8 @@ public struct Records: Equatable, Sendable {
             items[i.id] = .invite(i)
         case let .state(s):
             items[s.id]?.apply(s)
+        case let .route(r):
+            routes[r.id] = r
         case let .neighbour(n):
             neighbours[n.routingId] = n
             syncing?.neighbours.insert(n.routingId)
@@ -209,9 +218,13 @@ public struct Records: Equatable, Sendable {
     /// The user forgot the conversation with `peer` through `through`: every message and invite
     /// with an address, or every group message to a group, whose `id` is `through` or less, held
     /// in whatever state. An invite to a group sits with the address, so a group's forgetting
-    /// leaves it.
+    /// leaves it. Each goes with its route.
     mutating func forget(_ peer: Peer, through: UInt32) {
-        items = items.filter { $0.key > through || $0.value.peer != peer }
+        let gone = items.filter { $0.key <= through && $0.value.peer == peer }.keys
+        for id in gone {
+            items[id] = nil
+            routes[id] = nil
+        }
     }
 
     /// The `after` to sync with. Normally the greatest `id` held. After missed news, one less than

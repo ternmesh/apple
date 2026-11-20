@@ -9,7 +9,8 @@
 //   7–10  missedSince, big-endian, 0 when unset
 //   then  entries to the end: a length byte n, then n bytes of a frame with seq 0, encoded at
 //         Companion.version. SELF, every CONTACT, every GROUP, every MESSAGE, GROUP_MESSAGE and
-//         INVITE in id order, every NEIGHBOUR, then AIRTIME and POWER, each only if held.
+//         INVITE in id order, every ROUTE in id order, every NEIGHBOUR, then AIRTIME and POWER,
+//         each only if held.
 //
 // A SELF from a node of version 5 or earlier, or one a client of version 5 wrote, ends before
 // `cards` and `card_name`: it is read as version 5's, and says nothing of cards. One of version 6
@@ -24,6 +25,10 @@
 // sharing's minutes left and how long ago a card was heard are as of when the record was sent, so
 // on disk they only grow wrong, and every sync sends each whole again. A file that holds them all the same is read, and they are
 // passed over.
+//
+// How each message went (ROUTE, version 18) is kept, after the messages: a node may keep none
+// across a restart, and a client keeps those it holds. A TRACED, which is not a record, spoils a
+// file as a MANAGED does.
 
 extension Records {
     static let fileMagic: [UInt8] = Array("TRNR".utf8)
@@ -49,6 +54,7 @@ extension Records {
             case let .invite(i): bodies.append(.invite(i))
             }
         }
+        bodies += routes.values.sorted { $0.id < $1.id }.map(Body.route)
         bodies += neighbours.values.sorted { $0.routingId < $1.routingId }.map(Body.neighbour)
         if let airtime { bodies.append(.airtime(airtime)) }
         if let power { bodies.append(.power(power)) }
@@ -114,7 +120,7 @@ extension Body {
     /// News that is the whole of one thing as the node holds it: what the file keeps.
     var isRecord: Bool {
         switch self {
-        case .nodeSelf, .contact, .group, .message, .groupMessage, .invite, .neighbour, .airtime, .power: true
+        case .nodeSelf, .contact, .group, .message, .groupMessage, .invite, .route, .neighbour, .airtime, .power: true
         default: false
         }
     }
