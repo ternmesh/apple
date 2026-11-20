@@ -138,6 +138,11 @@ final class NodeModel: ObservableObject {
     @Published private(set) var asked: [Asked] = [] {
         didSet { keepAsked() }
     }
+    /// The nodes this app's node is an owner of, or not, as each last said: kept for each node the
+    /// app connects to.
+    @Published private(set) var owned = Owned() {
+        didSet { keepOwned() }
+    }
     @Published private(set) var firmware: String?
     /// The node's board and release, from an `INFO` of version 4 or later; nil before. An empty
     /// board is a node that cannot be updated over Bluetooth.
@@ -261,6 +266,7 @@ final class NodeModel: ObservableObject {
             records = Self.load(id)
             outgoing = Self.loadOutgoing(id)
             asked = Self.loadAsked(id)
+            owned = Self.loadOwned(id)
         }
         conversations = records.conversations
         routingNames = records.routingNames
@@ -304,6 +310,10 @@ final class NodeModel: ObservableObject {
             showUnread()
             outgoing = Self.loadOutgoing(id)
             asked = Self.loadAsked(id)
+            owned = Self.loadOwned(id)
+            // Managed through the node before: their requests and answers are that node's.
+            for m in managedNodes.values { m.cancel() }
+            managedNodes = [:]
             chatPath = []
             seen = [:]
             queuedFloor = 0
@@ -372,6 +382,9 @@ final class NodeModel: ObservableObject {
         showUnread()
         outgoing = []
         asked = []
+        owned = Owned()
+        for m in managedNodes.values { m.cancel() }
+        managedNodes = [:]
         chatPath = []
         seen = [:]
         queuedFloor = 0
@@ -544,11 +557,24 @@ final class NodeModel: ObservableObject {
     /// The nodes this app manages over the mesh through its own, this run, by address.
     private var managedNodes: [Address: ManagedNode] = [:]
 
+    /// Whether this app's node is an owner of the node at `address`, as that node last said: nil if
+    /// it has said nothing.
+    func isOwner(of address: Address) -> Bool? { owned.isOwner(of: address) }
+
     /// The node at `address`, managed over the mesh through this one: the same each time asked, so
-    /// that leaving its screen and coming back keeps what it said.
+    /// that leaving its screen and coming back keeps what it said. What its answers say of whether
+    /// this app's node is an owner of it is kept.
     func managed(_ address: Address) -> ManagedNode {
         if let m = managedNodes[address] { return m }
-        let m = ManagedNode(address: address, now: BluetoothLink.clock) { [weak self] body, then in
+        let m = ManagedNode(
+            address: address, now: BluetoothLink.clock,
+            name: { [weak self] in self?.records.name(of: .contact(address)) ?? address.short },
+            wake: { [weak self] in self?.records.contacts[address]?.wake },
+            owner: { [weak self] isOwner in
+                guard let self, self.owned.isOwner(of: address) != isOwner else { return }
+                self.owned.set(address, owner: isOwner)
+            }
+        ) { [weak self] body, then in
             guard let c = self?.link.connection else { return then(.failure(.closed)) }
             c.submit(body, then: then)
         }
@@ -566,6 +592,8 @@ final class NodeModel: ObservableObject {
     /// Tells the user of an `OWNER_CHANGED`: who may manage a node changed, which they may not have
     /// done. As a notice while the app is in front, and a notification while it is not.
     private func ownerChanged(_ change: OwnerChange) {
+        // A notice about this app's node says whether it may manage that node now.
+        owned.take(change, me: records.me?.address)
         let you = records.me?.address == change.contact
         let text = Words.ownerChanged(
             change, contact: records.name(of: .contact(change.contact)), node: records.name(of: .contact(change.from)),
@@ -1454,6 +1482,7 @@ final class NodeModel: ObservableObject {
         try? FileManager.default.removeItem(at: file(id))
         UserDefaults.standard.removeObject(forKey: outgoingKey(id))
         UserDefaults.standard.removeObject(forKey: askedKey(id))
+        UserDefaults.standard.removeObject(forKey: ownedKey(id))
         UserDefaults.standard.removeObject(forKey: setupKey(id))
         UserDefaults.standard.removeObject(forKey: offKey(id))
     }
@@ -1515,6 +1544,17 @@ final class NodeModel: ObservableObject {
     }
 
     private static func askedKey(_ id: UUID) -> String { "org.ternmesh.tern.asked.\(id.uuidString)" }
+
+    private func keepOwned() {
+        guard let id = remembered else { return }
+        UserDefaults.standard.set(owned.stored, forKey: Self.ownedKey(id))
+    }
+
+    private static func ownedKey(_ id: UUID) -> String { "org.ternmesh.tern.owned.\(id.uuidString)" }
+
+    private static func loadOwned(_ id: UUID) -> Owned {
+        Owned(stored: UserDefaults.standard.dictionary(forKey: ownedKey(id)) as? [String: Bool] ?? [:])
+    }
 
     private static func loadAsked(_ id: UUID) -> [Asked] {
         let kept = UserDefaults.standard.array(forKey: askedKey(id)) as? [[String: String]] ?? []

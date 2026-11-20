@@ -40,13 +40,14 @@ to work on it alone.
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
 | `Sources/TernKit/Connection/Connection.swift` | One connection, the client's half: `HELLO` and the version both speak, one request at a time, counted news, syncing again, and the `PING` that keeps a node from taking the app for gone. No I/O and no clock of its own: a link hands it frames and calls `tick()`. |
-| `Sources/TernKit/Connection/Remote.swift` | A node managed over the mesh (draft/managing.md): each request in a `MANAGE`, its answer read from `MANAGED`, `HELLO` first and again after the node restarts, a request not delivered tried again, and the `PING` that ends a setting's trial, after a node that restarts to apply it can answer. No I/O and no clock of its own, as the connection. |
+| `Sources/TernKit/Connection/Remote.swift` | A node managed over the mesh (draft/managing.md): each request in a `MANAGE`, its answer read from `MANAGED`, `HELLO` first and again after the node restarts, a request not delivered tried again, waited for through the wake of a node that sleeps, stopped at `ERROR` 15, and the `PING` that ends a setting's trial, after a node that restarts to apply it can answer. No I/O and no clock of its own, as the connection. |
 | `Sources/TernKit/Connection/Records.swift` | What the node has said it holds, as news leaves it, positions, sharing, cards and the node's own fix included, and the `after` the next sync asks from. |
 | `Sources/TernKit/Connection/RecordsFile.swift` | The records on disk: a short header, then each record as the frame that carried it, but for positions, sharing, cards and the node's own fix, which every sync sends again. The Android app writes the same bytes. |
 | `Sources/TernKit/Connection/Conversations.swift` | The records as conversations, with what is unread; the `through` a `READ` may go to without marking another conversation's; and what is new enough to notify of. |
 | `Sources/TernKit/Connection/RoutingNames.swift` | An address's routing id as the node's version makes it, from the address itself before version 14 and from the key blinded from it after, kept once worked out; and the contacts' names by theirs: what a neighbour or a group message's writer shows as, when it is a contact. |
 | `Sources/TernKit/Crypto/Ed25519.swift` | The few calls into libsodium: SHA-512, a scalar mod L, a valid address, a point multiplied, a signature checked. |
 | `Sources/TernKit/Connection/Cards.swift` | Who is about as a person reads it: the cards held, most recently heard first, each counted on from when its record came; the name a node's cards may carry; a card's name shown as its sender's claim. |
+| `Sources/TernKit/Connection/Owned.swift` | The nodes this client's node is an owner of, or not, as each last said by notice or answer, and as kept between runs. |
 | `Sources/TernKit/Connection/Words.swift` | The protocol's numbers in words: states, reasons, refusals, roles, how an update ended. |
 | `Sources/TernKit/Update/Updater.swift` | One firmware image sent to a node: `UPDATE_BEGIN`, on from the offset the node gives, `UPDATE_DATA` a chunk at a time, `UPDATE_END`, and going on after the link drops. Through the connection, with no I/O of its own. |
 | `Sources/TernKit/Update/BootloaderUpdater.swift` | A DFU package given to a node by its bootloader: `UPDATE_BOOTLOADER`, the bootloader found by its service, the package, and once more after a bootloader left mid-session. |
@@ -134,12 +135,19 @@ removes those messages and their notifications. The contact, its session and the
 
 From a node of version 17, a contact can be made an owner of the user's node (`OWNER`), from its
 menu in People or in its chat, once the app has said that an owner can change the node's settings
-and who it takes from anywhere on the mesh; People marks owners. A contact's menu also offers to
-manage their node, over the mesh, as one of its owners (`MANAGE`): its state from a sync, the
-settings an owner may change there (not its region or its PIN), its Bluetooth lock, which of its
-contacts are owners, and restarting it. Each request goes one at a time, is tried again up to three
-times 15 s apart if it was not delivered, and is waited on for 2 minutes once it was; the screen says
-where it is. A setting changed is on trial for 15 minutes, and the app confirms it with a `PING` at
+and who it takes from anywhere on the mesh; People marks owners. The app keeps, for each node it
+connects to, which nodes that node is an owner of: as a node's notice says (`OWNER_CHANGED` about
+the app's own node), as its answers say (it answers only its owners), and as `ERROR` 15, not an
+owner, says. A contact's menu offers to manage their node only when the app's node is one of its
+owners; for any other it offers to check, with one `HELLO`, and says so of one that said it is not
+(no answer says nothing, and is not kept). Managing goes over the mesh (`MANAGE`): its state from a
+sync, the settings an owner may change there (not its region or its PIN), its Bluetooth lock, which
+of its contacts are owners, and restarting it. Each request goes one at a time, is tried again up to
+three times 15 s apart if it was not delivered, and is waited on for 2 minutes once it was; for a
+node known to sleep (its last sync's `SLEEP`, else its contact's `wake`), until its wake and listen
+have passed and 2 minutes more. `ERROR` 15 stops it at once. The screen says the step it is at:
+first contact, finding a route, the airtime it waits for, delivered and waiting for the answer, the
+try, and how long a node that sleeps may take. A setting changed is on trial for 15 minutes, and the app confirms it with a `PING` at
 once, or 45 s later for a role or a power, which restart the node; until then the screen says it is
 on trial. When a node's owners change, the node tells them (`OWNER_CHANGED`), and the app says who
 was made or is no longer an owner of which node, at the node or over the mesh. The Node tab says

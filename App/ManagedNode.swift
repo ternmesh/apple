@@ -1,7 +1,7 @@
 // A node the user manages over the mesh, as one of its owners, through the node the app is
-// connected to: what its last sync said of it, the request on its way and where it is, a setting on
-// trial, and what came to nothing. The Manage screen reads it and asks it to act; `Remote`, in
-// TernKit, does the asking.
+// connected to: what its last sync said of it, the request on its way and the step it is at, a
+// setting on trial, and what came to nothing. The Manage screen reads it and asks it to act, and
+// the owner check asks it whether the user's node is an owner; `Remote`, in TernKit, does the asking.
 
 import Combine
 import Foundation
@@ -15,8 +15,17 @@ final class ManagedNode: ObservableObject {
     @Published private(set) var synced = false
     @Published private(set) var firmware: String?
     @Published private(set) var nodeVersion: UInt8?
-    /// The request on its way, in words, while one is; nil when nothing is asked.
+    /// The step the request on its way is at, in words, while one is; nil when nothing is asked.
     @Published private(set) var working: String?
+    /// What is being asked, in words, while anything is.
+    @Published private(set) var asking: String?
+    /// Said while a request waits for a node known to sleep: how long it may take.
+    @Published private(set) var asleep: String?
+    /// What the last check of whether the user's node is an owner found; nil before one, and while
+    /// one is under way.
+    @Published private(set) var checked: Check?
+    /// The node said the user's node is not one of its owners, until it answers again.
+    @Published private(set) var notOwner = false
     /// When the setting last changed goes back unless the node hears from an owner again; nil when
     /// none is on trial.
     @Published private(set) var trialEnds: Date?
@@ -29,18 +38,50 @@ final class ManagedNode: ObservableObject {
     /// The node said it restarts: until it answers again.
     @Published private(set) var restarting = false
 
+    enum Check: Equatable {
+        case owner, notOwner, noAnswer
+        case failed(String)
+    }
+
     private let remote: Remote
     private let now: () -> Double
+    /// The name the user knows the node by.
+    private let name: () -> String
     private var ticking: AnyCancellable?
 
+    /// `wake` is what the app's node holds of how long this one sleeps; `owner` is told what each
+    /// answer says of whether the user's node is one of its owners.
     init(
-        address: Address, now: @escaping () -> Double,
+        address: Address, now: @escaping () -> Double, name: @escaping () -> String,
+        wake: @escaping () -> UInt16?, owner: @escaping (Bool) -> Void,
         submit: @escaping (Body, @escaping (Result<Body, RequestFailure>) -> Void) -> Void
     ) {
         self.address = address
         self.now = now
+        self.name = name
         remote = Remote(address: address, now: now, submit: submit)
+        remote.wakeHint = wake
+        remote.onOwner = { [weak self] isOwner in
+            self?.notOwner = !isOwner
+            owner(isOwner)
+        }
         remote.onChange = { [weak self] in self?.update() }
+    }
+
+    /// Asks the node `HELLO`, and only that: an answer says the user's node is one of its owners,
+    /// `ERROR` 15 that it is not, and silence nothing.
+    func check() {
+        checked = nil
+        remote.greet { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success: self.checked = .owner
+            case .failure(.notAnOwner): self.checked = .notOwner
+            case .failure(.noAnswer), .failure(.notDelivered): self.checked = .noAnswer
+            case .failure(.cancelled): self.checked = nil
+            case let .failure(f): self.checked = .failed(Words.manage(f))
+            }
+        }
     }
 
     var isBusy: Bool { working != nil }
@@ -98,6 +139,8 @@ final class ManagedNode: ObservableObject {
             restarting = false
         case .failure(.cancelled):
             break
+        case .failure(.notAnOwner):
+            problem = Words.notAnOwner(name())
         case let .failure(f):
             problem = Words.manage(f)
         }
@@ -112,12 +155,21 @@ final class ManagedNode: ObservableObject {
         let wasOnTrial = trialEnds != nil
         trialEnds = remote.trialEnds.map { Date(timeIntervalSinceNow: $0 - now()) }
         if wasOnTrial, trialEnds == nil, problem == nil { confirmed = true }
+        asking = remote.asking.map(Self.what)
         if remote.settleEnds != nil {
             working = Words.restartSettle
-        } else if let asking = remote.asking {
-            working = "\(Self.what(asking)): \(Words.manageProgress(remote.progress, tries: remote.tries))"
+        } else if remote.asking != nil {
+            working = Words.manageStep(
+                remote.progress, reason: remote.reason, wait: remote.wait, tries: remote.tries, node: name())
         } else {
             working = nil
+        }
+        // Said only when something says the node sleeps, and only before its answer is on its way.
+        if remote.asking != nil, remote.settleEnds == nil, remote.progress != MessageState.delivered,
+           let w = remote.wakes {
+            asleep = Words.asleep(name(), wake: w.wake)
+        } else {
+            asleep = nil
         }
         // The remote keeps no time of its own: tick it while it waits for anything.
         if remote.isBusy, ticking == nil {
@@ -132,7 +184,7 @@ final class ManagedNode: ObservableObject {
     /// A request, as the screen names it.
     private static func what(_ body: Body) -> String {
         switch body {
-        case .hello: "Saying hello"
+        case .hello: "Checking you're an owner"
         case .sync: "Asking for its state"
         case .ping: "Confirming"
         case .set: "Changing the setting"
