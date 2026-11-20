@@ -292,6 +292,96 @@ final class ConnectionTests: XCTestCase {
         XCTAssertNil(link.connection.records.me?.locked)
     }
 
+    /// A client of version 17 is told nothing of how messages went, and does not send `TRACE`,
+    /// which its version does not define.
+    func testOlderVersion17() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 17 }!
+        let frames = older["frames"]!.array
+        XCTAssertEqual(frames[frames.count - 2]["type"]!.string, "TRACE")
+        let link = Link(Connection(version: 17, now: { 0 }, wallTime: nil))
+        XCTAssertEqual(link.replay(Array(frames.dropLast(2))), [])
+        XCTAssertEqual(link.connection.agreed, 17)
+        var result: Result<Body, RequestFailure>?
+        link.connection.submit(try Frame.decode(frames[frames.count - 2]["frame"]!.bytes).body) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(link.out, [])
+        XCTAssertEqual(link.connection.records.routes, [:])
+        XCTAssertTrue(link.connection.records.contacts.values.allSatisfy { $0.owner != nil }, "version 17 is told of owners")
+        XCTAssertNotNil(link.connection.records.me?.locked)
+    }
+
+    /// How messages went, and traces, as in the specification's `route`: a message sent through the
+    /// relay, tried again and delivered, whose last `ROUTE` describes the acknowledgement's way back;
+    /// a message received across two hops and a group message received, each with its `ROUTE`; and
+    /// traces refused (a reserved id, the node's own, one already out), answered, not answered and
+    /// not begun, each told by `TRACED`. A trace's `STATE` changes no message.
+    func testRoute() throws {
+        let link = Link(Connection(now: { 0 }, wallTime: { 1_790_000_000 }))
+        var answers: [Result<Body, RequestFailure>] = []
+        link.connection.open()
+        for f in v["route"]!.array where f["from"]!.string == "client" {
+            let body = try Frame.decode(f["frame"]!.bytes).body
+            if case .hello = body { continue }
+            link.connection.submit(body) { answers.append($0) }
+        }
+        try playManage(link, refs: true, vector: "route")
+        XCTAssertEqual(answers, [
+            .success(.queued(id: 17)), .failure(.refused(code: ErrorCode.refused)),
+            .failure(.refused(code: ErrorCode.refused)), .success(.queued(id: 20)),
+            .failure(.refused(code: ErrorCode.notNow)), .success(.queued(id: 21)), .success(.queued(id: 22)),
+        ])
+        let r = link.connection.records
+        XCTAssertEqual(r.items.keys.sorted(), [17, 18, 19], "a trace's id is no message's")
+        XCTAssertEqual(r.items[17]?.state, MessageState.delivered)
+        let relay: UInt32 = 0x1D2E_3F40
+        XCTAssertEqual(
+            r.routes[17], Route(id: 17, hops: 2, snr: 22, rssi: -98, via: relay, goes: 2, took: 19_640),
+            "the last ROUTE, once delivered: the acknowledgement's way back")
+        XCTAssertEqual(
+            r.routes[18], Route(id: 18, hops: 2, snr: 19, rssi: -101, via: 0, goes: 0, took: 0),
+            "received across two hops; no frame names where it came from")
+        XCTAssertEqual(r.routes[19]?.hops, 1, "a group message: one hop, or none less")
+        let news = link.events.compactMap { if case let .news(body) = $0 { body } else { nil } }
+        let sent = news.compactMap { if case let .route(route) = $0, route.id == 17 { route } else { nil } }
+        XCTAssertEqual(sent.map(\.goes), [1, 2, 2], "each try on the air, then delivered")
+        XCTAssertEqual(sent.map(\.hops), [0, 0, 2], "nothing known of the way back until it is delivered")
+
+        let traced = news.compactMap { if case let .traced(t) = $0 { t } else { nil } }
+        XCTAssertEqual(traced.map(\.id), [20, 21, 22])
+        XCTAssertEqual(traced.map(\.result), [Traced.answered, Traced.notAnswered, Traced.notBegun])
+        let bob = traced[0].to
+        XCTAssertEqual(traced[0].wayOut.map(\.routingId), [relay, bob], "out through the relay, answered by Bob")
+        XCTAssertEqual(traced[0].wayBack.map(\.routingId), [relay])
+        XCTAssertEqual(traced[0].snr, 26)
+        XCTAssertEqual(traced[0].took, 3_120)
+        XCTAssertTrue(traced.dropFirst().allSatisfy { $0.hops.isEmpty && $0.took == 0 && !$0.wasAnswered })
+    }
+
+    /// A `ROUTE` is kept across a sync that sends none, since a node may keep none across a restart;
+    /// the next one for the same message replaces it; and a `FORGOTTEN` takes it with its message.
+    func testRoutesOutliveASyncAndGoWithTheirMessages() throws {
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        node.news(.message(Node.message(id: 4, state: MessageState.received)))
+        node.news(.route(Route(id: 4, hops: 3, snr: -8, rssi: -110, via: 0, goes: 0, took: 0)))
+        node.news(.message(Node.message(id: 5, state: MessageState.sent)))
+        node.news(.route(Route(id: 5, hops: 0, snr: 0, rssi: 0, via: 9, goes: 1, took: 0)))
+        node.news(.route(Route(id: 5, hops: 1, snr: 20, rssi: -70, via: 9, goes: 1, took: 800)))
+        XCTAssertEqual(node.connection.records.routes[5]?.took, 800, "the last replaces the one before")
+        // A sync that sends the messages again, but no routes: a node that restarted.
+        node.connection.close()
+        node.connection.open()
+        node.answerOne()
+        node.answerOne()
+        node.news(.message(Node.message(id: 4, state: MessageState.received)))
+        node.news(.message(Node.message(id: 5, state: MessageState.delivered)))
+        node.answerSync()
+        XCTAssertEqual(node.connection.records.routes.keys.sorted(), [4, 5])
+        node.news(.forgotten(contact: Node.bob, through: 4))
+        XCTAssertEqual(node.connection.records.routes.keys.sorted(), [5])
+    }
+
     /// Managing, as in the specification's `manage`, request by request: the node refuses an owner
     /// that is not a contact or neither 0 nor 1, and a `MANAGE` to itself or of nothing; the owner
     /// made is its contact's `owner`; each `MANAGE` is queued like a message, and the managed node's
@@ -399,10 +489,11 @@ final class ConnectionTests: XCTestCase {
     /// file leaves out: those are answered here, and the client's seqs run two past the file's. A
     /// `MANAGE`'s `ref` is checked only with `refs`: a `Remote` draws its own.
     private func playManage(
-        _ link: Link, refs: Bool, afterEach: () -> Void = {}, file: StaticString = #filePath, line: UInt = #line
+        _ link: Link, refs: Bool, vector: String = "manage", afterEach: () -> Void = {}, file: StaticString = #filePath,
+        line: UInt = #line
     ) throws {
         let c = link.connection
-        for f in v["manage"]!.array {
+        for f in v[vector]!.array {
             XCTAssertLessThanOrEqual(link.out.count, 1, "two requests at once", file: file, line: line)
             var bytes = f["frame"]!.bytes
             // HELLO and its INFO come before the clock and the sync, and keep their seq.
@@ -496,16 +587,16 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["SYNC"], "the sync missed news")
     }
 
-    /// The client says version 17 in `HELLO`, and speaks the lesser of it and the node's.
-    func testHelloSaysSeventeen() throws {
-        XCTAssertEqual(Companion.version, 17)
-        for nodeVersion: UInt8 in [11, 12, 13, 14, 15, 16, 17, 18] {
+    /// The client says version 18 in `HELLO`, and speaks the lesser of it and the node's.
+    func testHelloSaysEighteen() throws {
+        XCTAssertEqual(Companion.version, 18)
+        for nodeVersion: UInt8 in [11, 12, 13, 14, 15, 16, 17, 18, 19] {
             let node = Node()
             node.version = nodeVersion
             node.connection.open()
-            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 17))
+            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 18))
             node.answerAll()
-            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 17))
+            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 18))
         }
     }
 

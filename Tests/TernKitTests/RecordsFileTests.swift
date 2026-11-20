@@ -25,6 +25,7 @@ final class RecordsFileTests: XCTestCase {
         XCTAssertFalse(r.neighbours.isEmpty)
         XCTAssertNotNil(r.airtime)
         XCTAssertNotNil(r.power)
+        XCTAssertFalse(r.routes.isEmpty)
         let kinds = Set(r.items.values.map { item -> Int in
             switch item {
             case .message: 0
@@ -225,6 +226,38 @@ final class RecordsFileTests: XCTestCase {
         XCTAssertEqual(Records(decoding: file).after(version: 5), 0)
         file[5] = 5
         XCTAssertNotEqual(Records(decoding: file).after(version: 5), 0)
+    }
+
+    /// How each message went is kept (version 18), the last `ROUTE` for each, after the messages; a
+    /// `FORGOTTEN` takes the routes of what it forgets; and a file with a `TRACED` in it, which is
+    /// not a record, is spoiled.
+    func testRoutesAreKeptAndForgottenWithTheirMessages() throws {
+        let alice = Address([UInt8](repeating: 0xA1, count: 32))!
+        let bob = Address([UInt8](repeating: 0xB0, count: 32))!
+        func received(_ id: UInt32, _ from: Address) -> Body {
+            .message(Message(id: id, contact: from, time: 0, flags: 0, state: MessageState.received, reason: 0, wait: 0, text: "x"))
+        }
+        var r = Records()
+        r.apply(received(40, alice))
+        r.apply(received(41, bob))
+        r.apply(.route(Route(id: 40, hops: 1, snr: 25, rssi: -71, via: 0, goes: 0, took: 0)))
+        r.apply(.route(Route(id: 41, hops: 3, snr: -38, rssi: -112, via: 0, goes: 0, took: 0)))
+        r.apply(.route(Route(id: 41, hops: 2, snr: -30, rssi: -110, via: 0, goes: 0, took: 0)))
+        r.syncedVersion = Companion.version
+        XCTAssertEqual(r.routes[41]?.hops, 2, "the last replaces the one before")
+        XCTAssertEqual(Records(decoding: r.encoded()), r)
+        // After the messages, before anything else: as the Android app writes them.
+        let file = r.encoded()
+        let types = sequence(state: 11) { at -> UInt8? in
+            guard at < file.count else { return nil }
+            defer { at += 1 + Int(file[at]) }
+            return file[at + 1]
+        }
+        XCTAssertEqual(Array(types), [0x83, 0x83, 0x9A, 0x9A])
+        r.apply(.forgotten(contact: alice, through: 40))
+        XCTAssertEqual(Array(r.routes.keys), [41])
+        let traced = try Frame(seq: 0, body: .traced(Traced(id: 42, to: 1, result: Traced.notBegun, out: 0, took: 0, snr: 0, entries: []))).encode()
+        XCTAssertEqual(Records(decoding: r.encoded() + [UInt8(traced.count)] + traced), Records())
     }
 
     func testAnythingSpoiledReadsAsNothingHeld() throws {

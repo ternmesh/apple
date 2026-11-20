@@ -1,11 +1,12 @@
-// The companion protocol's frames, version 17: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 18: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 16 is this without managing (the requests
+    /// The version this client speaks. Version 17 is this without how messages went and traces (the
+    /// request `TRACE` and the news `ROUTE` and `TRACED`). Version 16 is version 17 without managing (the requests
     /// `MANAGE`, `OWNER` and `RESTART`, the setting 10, errors 13 and 14, the news `MANAGED` and
     /// `OWNER_CHANGED`, `CONTACT`'s `owner` and `SELF`'s `locked`). Version 15 is version 16 without
     /// forgetting (the requests
@@ -26,7 +27,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 17
+    public static let version: UInt8 = 18
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -44,6 +45,7 @@ public enum Companion {
         case 0x95: 15
         case 0x12, 0x28, 0x96...0x97: 16
         case 0x13, 0x14, 0x38, 0x98...0x99: 17
+        case 0x15, 0x9A...0x9B: 18
         default: 0
         }
     }
@@ -96,6 +98,11 @@ public enum Companion {
     /// How long a `SET` over the mesh is on trial after it is answered, in seconds (`TRIAL`): the
     /// node takes the old value back unless an owner asks it something more over the mesh.
     public static let trial = 900.0
+    /// A `TRACED`'s `entries`, at most: `traceEntry` bytes for each, sixteen each way (version 18).
+    public static let traceEntriesMax = 160
+    /// One entry of a trace: a routing id, 4 bytes, and the SNR its node heard the frame at, an
+    /// `i8` in quarters of a dB.
+    public static let traceEntry = 5
     /// The least time between two `ASKED`s for one address, or two of `NEIGHBOUR`, `AIRTIME` or
     /// `POWER`, or two `FIX`es for a fix that moved, in seconds.
     public static let quiet = 10.0
@@ -366,6 +373,108 @@ public struct OwnerChange: Equatable, Sendable {
     public static let byLink: UInt8 = 0
     /// `by`: by one of its owners over the mesh.
     public static let byMesh: UInt8 = 1
+}
+
+/// `ROUTE`: how the message, group message or invite `id` went, as the node knows it (version 18).
+/// A record, which replaces any before it for that `id`.
+public struct Route: Equatable, Sendable {
+    public var id: UInt32
+    /// How many hops the frame that brought it came, the last counted: 1 for straight from its
+    /// sender, 0 for unknown. For a group message received, the most it can have come, so it came
+    /// that far or one hop less. For one sent, the acknowledgement's, once it is delivered.
+    public var hops: UInt8
+    /// How that frame was heard: its signal-to-noise ratio in quarters of a dB, 0 when `hops` is.
+    public var snr: Int8
+    /// Its signal strength in dBm, 0 when `hops` is.
+    public var rssi: Int16
+    /// For one sent, the routing id of the neighbour it last went to, the destination's own when it
+    /// went straight there; 0 while it has gone nowhere, and for anything received or any group
+    /// message.
+    public var via: UInt32
+    /// How many tries of one sent have gone on the air; 0 for anything received.
+    public var goes: UInt8
+    /// For one sent and delivered, milliseconds from its first going on the air until its
+    /// acknowledgement came; 0 otherwise.
+    public var took: UInt32
+
+    public init(id: UInt32, hops: UInt8, snr: Int8, rssi: Int16, via: UInt32, goes: UInt8, took: UInt32) {
+        self.id = id
+        self.hops = hops
+        self.snr = snr
+        self.rssi = rssi
+        self.via = via
+        self.goes = goes
+        self.took = took
+    }
+}
+
+/// One entry of a trace: a node that passed it on or answered it, by its routing id, and how well
+/// it heard the node before, in quarters of a dB.
+public struct TraceHop: Equatable, Sendable {
+    public var routingId: UInt32
+    public var snrQuarterDb: Int8
+
+    public init(routingId: UInt32, snrQuarterDb: Int8) {
+        self.routingId = routingId
+        self.snrQuarterDb = snrQuarterDb
+    }
+}
+
+/// `TRACED`: how the trace `id` to the routing id `to` ended (version 18). Not a record: a sync
+/// does not send it again. A trace shows how frames went just then, and any relay on the way can
+/// write what it likes in its entry.
+public struct Traced: Equatable, Sendable {
+    public var id: UInt32
+    public var to: UInt32
+    /// One of `answered`, `keeper`, `noRoute`, `notAnswered` and `notBegun`.
+    public var result: UInt8
+    /// How many of `entries` are the way out, ending with the node that answered.
+    public var out: UInt8
+    /// Milliseconds from the trace's first going on the air until the answer came; 0 for 3 and 4.
+    public var took: UInt32
+    /// How well this node heard the answer, in quarters of a dB; 0 for 3 and 4.
+    public var snr: Int8
+    /// The answer's entries, `Companion.traceEntry` bytes each; empty for 3 and 4.
+    public var entries: [UInt8]
+
+    public init(id: UInt32, to: UInt32, result: UInt8, out: UInt8, took: UInt32, snr: Int8, entries: [UInt8]) {
+        self.id = id
+        self.to = to
+        self.result = result
+        self.out = out
+        self.took = took
+        self.snr = snr
+        self.entries = entries
+    }
+
+    /// Answered by the node traced to.
+    public static let answered: UInt8 = 0
+    /// Answered by the keeper of the node traced to, a leaf that sleeps: it got as far as where
+    /// frames for it wait.
+    public static let keeper: UInt8 = 1
+    /// Answered by a relay with no route to the node traced to: it got as far as that relay.
+    public static let noRoute: UInt8 = 2
+    /// Not answered in time.
+    public static let notAnswered: UInt8 = 3
+    /// Not begun: the node found no route.
+    public static let notBegun: UInt8 = 4
+
+    /// Each whole entry, in the order they were added: `wayOut`, then `wayBack`.
+    public var hops: [TraceHop] {
+        stride(from: 0, to: entries.count / Companion.traceEntry * Companion.traceEntry, by: Companion.traceEntry).map { at in
+            let id = entries[at..<at + 4].reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+            return TraceHop(routingId: id, snrQuarterDb: Int8(bitPattern: entries[at + 4]))
+        }
+    }
+
+    /// The nodes that passed the trace on, and last the one that answered it.
+    public var wayOut: [TraceHop] { Array(hops.prefix(Int(out))) }
+
+    /// The nodes that passed the answer back, before it reached this node.
+    public var wayBack: [TraceHop] { Array(hops.dropFirst(Int(out))) }
+
+    /// Whether something answered it: its destination, its keeper or a relay with no route.
+    public var wasAnswered: Bool { result <= Traced.noRoute }
 }
 
 /// `STATE`: where a message is, and what it waits for.
@@ -700,7 +809,7 @@ public struct NodeFix: Equatable, Sendable {
     public var has: Bool { source != NodeFix.noSource }
 }
 
-/// What a frame says: every frame of version 17.
+/// What a frame says: every frame of version 18.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -726,6 +835,10 @@ public enum Body: Equatable, Sendable {
     /// Make the contact `address` one of the node's owners (`owner` 1), or not (0). Only ever at the
     /// user's asking, after saying what an owner can do (version 17).
     case owner(address: Address, owner: UInt8)
+    /// Find the way frames go to the node whose routing id is `to`, and back. `ref` is as for
+    /// `send`. Answered `QUEUED`; `STATE` news with that `id` says what became of it on the air, and
+    /// `TRACED` how it ended (version 18).
+    case trace(ref: UInt32, to: UInt32)
     case saveContact(address: Address, name: String)
     case removeContact(address: Address)
     case endSession(address: Address)
@@ -831,6 +944,10 @@ public enum Body: Equatable, Sendable {
     case managed(from: Address, answer: [UInt8])
     /// The node at `from` said its owners changed (version 17). Not a record.
     case ownerChanged(OwnerChange)
+    /// How a message, group message or invite went (version 18). A record.
+    case route(Route)
+    /// How a trace ended (version 18). Not a record.
+    case traced(Traced)
 
     /// The type byte.
     public var type: UInt8 {
@@ -846,6 +963,7 @@ public enum Body: Equatable, Sendable {
         case .forget: 0x12
         case .manage: 0x13
         case .owner: 0x14
+        case .trace: 0x15
         case .saveContact: 0x18
         case .removeContact: 0x19
         case .endSession: 0x1A
@@ -901,6 +1019,8 @@ public enum Body: Equatable, Sendable {
         case .groupForgotten: 0x97
         case .managed: 0x98
         case .ownerChanged: 0x99
+        case .route: 0x9A
+        case .traced: 0x9B
         }
     }
 
@@ -918,6 +1038,7 @@ public enum Body: Equatable, Sendable {
         case .forget: "FORGET"
         case .manage: "MANAGE"
         case .owner: "OWNER"
+        case .trace: "TRACE"
         case .saveContact: "SAVE_CONTACT"
         case .removeContact: "REMOVE_CONTACT"
         case .endSession: "END_SESSION"
@@ -973,6 +1094,8 @@ public enum Body: Equatable, Sendable {
         case .groupForgotten: "GROUP_FORGOTTEN"
         case .managed: "MANAGED"
         case .ownerChanged: "OWNER_CHANGED"
+        case .route: "ROUTE"
+        case .traced: "TRACED"
         }
     }
 }

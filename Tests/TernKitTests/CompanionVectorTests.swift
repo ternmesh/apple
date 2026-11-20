@@ -418,6 +418,47 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertEqual(try Frame.decode(locked).body, .nodeSelf(me))
     }
 
+    /// How messages went and traces are version 18's: `TRACE`, `ROUTE` and `TRACED`. A `TRACED`'s
+    /// entries are five bytes each, the first `out` the way out, and at most 160 bytes in all.
+    func testRoutesAndTracesAreVersion18s() throws {
+        for body in [
+            Body.trace(ref: 0xC0FF_EE20, to: 0x1D2E_3F40),
+            .route(Route(id: 17, hops: 2, snr: -38, rssi: -112, via: 0, goes: 0, took: 0)),
+            .traced(Traced(id: 24, to: 0x3031_3233, result: Traced.notAnswered, out: 0, took: 0, snr: 0, entries: [])),
+        ] {
+            XCTAssertEqual(body.since, 18, body.name)
+            let bytes = try Frame(seq: 1, body: body).encode()
+            XCTAssertEqual(try Frame.decode(bytes).body, body, body.name)
+            XCTAssertThrowsError(try Frame.decode(bytes, version: 17), body.name) {
+                XCTAssertEqual($0 as? DecodeError, .undefined)
+            }
+        }
+        // Signed fields at their ends, and a round trip as long as four bytes of milliseconds hold.
+        let far = Route(id: .max, hops: 255, snr: -128, rssi: -32768, via: .max, goes: 255, took: .max)
+        XCTAssertEqual(try Frame.decode(try Frame(seq: 0, body: .route(far)).encode()).body, .route(far))
+
+        let vector = try XCTUnwrap(v["frames"]!.array.first { $0["type"]!.string == "TRACED" && $0["fields"]!["result"]!.int == 0 })
+        guard case let .traced(answered) = try Frame.decode(vector["frame"]!.bytes).body else { return XCTFail() }
+        XCTAssertTrue(answered.wasAnswered)
+        XCTAssertEqual(
+            answered.wayOut, [TraceHop(routingId: 0x1D2E_3F40, snrQuarterDb: 24), TraceHop(routingId: 0x0A0B_0C0D, snrQuarterDb: 40)],
+            "the relay, then the node that answered")
+        XCTAssertEqual(answered.wayBack, [TraceHop(routingId: 0x1D2E_3F40, snrQuarterDb: 30)])
+        let longest = Traced(
+            id: 25, to: 1, result: Traced.answered, out: 16, took: 61_000, snr: -80,
+            entries: Array(repeating: 0, count: Companion.traceEntriesMax))
+        XCTAssertEqual(
+            try Frame(seq: 0, body: .traced(longest)).encode().count, Companion.maxFrame - 2,
+            "sixteen entries each way fit a frame, with room to spare")
+        XCTAssertEqual(longest.wayOut.count, 16)
+        XCTAssertEqual(longest.wayBack.count, 16)
+        var tooLong = longest
+        tooLong.entries.append(0)
+        XCTAssertThrowsError(try Frame(seq: 0, body: .traced(tooLong)).encode())
+        // An entry cut short is no hop.
+        XCTAssertEqual(Traced(id: 26, to: 1, result: 0, out: 1, took: 0, snr: 0, entries: Array(repeating: 0, count: 9)).hops.count, 1)
+    }
+
     /// Turning the node off is version 9's: a request with no fields, which a client sends
     /// again unchanged after giving up on its answer.
     func testOffIsVersion9s() throws {
@@ -496,6 +537,7 @@ final class CompanionVectorTests: XCTestCase {
         case "FORGET_GROUP": return .forgetGroup(group: gid("group"), through: u32("through"))
         case "MANAGE": return .manage(ref: u32("ref"), to: addr("to"), request: f["request"]!.bytes)
         case "OWNER": return .owner(address: addr("address"), owner: u8("owner"))
+        case "TRACE": return .trace(ref: u32("ref"), to: u32("to"))
         case "RESTART": return .restart
         case "SAVE_CONTACT": return .saveContact(address: addr("address"), name: str("name"))
         case "REMOVE_CONTACT": return .removeContact(address: addr("address"))
@@ -582,6 +624,14 @@ final class CompanionVectorTests: XCTestCase {
         case "MANAGED": return .managed(from: addr("from"), answer: f["answer"]!.bytes)
         case "OWNER_CHANGED":
             return .ownerChanged(OwnerChange(from: addr("from"), contact: addr("contact"), owner: u8("owner"), by: u8("by")))
+        case "ROUTE":
+            return .route(Route(
+                id: u32("id"), hops: u8("hops"), snr: i8("snr"), rssi: i16("rssi"), via: u32("via"), goes: u8("goes"),
+                took: u32("took")))
+        case "TRACED":
+            return .traced(Traced(
+                id: u32("id"), to: u32("to"), result: u8("result"), out: u8("out"), took: u32("took"), snr: i8("snr"),
+                entries: f["entries"]!.bytes))
         default: throw DecodeError.undefined
         }
     }

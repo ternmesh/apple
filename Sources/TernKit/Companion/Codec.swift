@@ -70,6 +70,25 @@ extension Frame {
         case let .owner(address, owner):
             w.addr(address)
             w.u8(owner)
+        case let .trace(ref, to):
+            w.u32(ref)
+            w.u32(to)
+        case let .route(r):
+            w.u32(r.id)
+            w.u8(r.hops)
+            w.i8(r.snr)
+            w.i16(r.rssi)
+            w.u32(r.via)
+            w.u8(r.goes)
+            w.u32(r.took)
+        case let .traced(t):
+            w.u32(t.id)
+            w.u32(t.to)
+            w.u8(t.result)
+            w.u8(t.out)
+            w.u32(t.took)
+            w.i8(t.snr)
+            try w.blob(t.entries, limit: Companion.traceEntriesMax, field: "entries")
         case let .managed(from, answer):
             w.addr(from)
             try w.blob(answer, limit: Companion.answerMax, field: "answer")
@@ -291,6 +310,7 @@ extension Frame {
         case 0x13:
             body = .manage(ref: try r.u32(), to: try r.addr(), request: try r.blob(limit: Companion.requestMax))
         case 0x14: body = .owner(address: try r.addr(), owner: try r.u8())
+        case 0x15: body = .trace(ref: try r.u32(), to: try r.u32())
         case 0x18: body = .saveContact(address: try r.addr(), name: try r.str(limit: Companion.nameMax))
         case 0x19: body = .removeContact(address: try r.addr())
         case 0x1A: body = .endSession(address: try r.addr())
@@ -407,6 +427,14 @@ extension Frame {
         case 0x98: body = .managed(from: try r.addr(), answer: try r.blob(limit: Companion.answerMax))
         case 0x99:
             body = .ownerChanged(OwnerChange(from: try r.addr(), contact: try r.addr(), owner: try r.u8(), by: try r.u8()))
+        case 0x9A:
+            body = .route(Route(
+                id: try r.u32(), hops: try r.u8(), snr: try r.i8(), rssi: try r.i16(), via: try r.u32(), goes: try r.u8(),
+                took: try r.u32()))
+        case 0x9B:
+            body = .traced(Traced(
+                id: try r.u32(), to: try r.u32(), result: try r.u8(), out: try r.u8(), took: try r.u32(), snr: try r.i8(),
+                entries: try r.blob(limit: Companion.traceEntriesMax)))
         default: throw DecodeError.undefined
         }
         return Frame(seq: bytes[1], body: body)

@@ -77,7 +77,7 @@ final class ManagingVectorTests: XCTestCase {
         let digest = Digest(Array(repeating: 0, count: 32))!
         func body(_ type: String, _ setting: JSON?) -> Body? {
             switch type {
-            case "HELLO": .hello(version: 17)
+            case "HELLO": .hello(version: Companion.version)
             case "SYNC": .sync(after: 0)
             case "PING": .ping
             case "SET_TIME": .setTime(1)
@@ -101,6 +101,7 @@ final class ManagingVectorTests: XCTestCase {
             case "FORGET": .forget(contact: bob, through: 1)
             case "MANAGE": .manage(ref: 1, to: bob, request: [3, 1])
             case "OWNER": .owner(address: bob, owner: 1)
+            case "TRACE": .trace(ref: 1, to: 1)
             case "SAVE_CONTACT": .saveContact(address: bob, name: "Bob")
             case "REMOVE_CONTACT": .removeContact(address: bob)
             case "END_SESSION": .endSession(address: bob)
@@ -388,7 +389,7 @@ final class RemoteTests: XCTestCase {
         let remote = makeRemote()
         var results: [Result<Body, ManageFailure>] = []
         remote.request(.ping) { results.append($0) }
-        XCTAssertEqual(asked.body, .hello(version: 17))
+        XCTAssertEqual(asked.body, .hello(version: Companion.version))
         queue()
         answer(remote, [.info(version: 16, firmware: "tern", board: "b", release: "r", update: 1)])
         queue()
@@ -410,7 +411,7 @@ final class RemoteTests: XCTestCase {
         var results: [Result<Body, ManageFailure>] = []
         remote.request(.sync(after: 0)) { results.append($0) }
         remote.request(.ping) { results.append($0) }
-        XCTAssertEqual(asked.body, .hello(version: 17))
+        XCTAssertEqual(asked.body, .hello(version: Companion.version))
         state(remote, queue(), MessageState.delivered)
         answer(remote, [.error(code: ErrorCode.notAnOwner)])
         XCTAssertEqual(results, [.failure(.notAnOwner), .failure(.notAnOwner)])
@@ -437,7 +438,7 @@ final class RemoteTests: XCTestCase {
         remote.onOwner = { owner.append($0) }
         var result: Result<Body, ManageFailure>?
         remote.greet { result = $0 }
-        XCTAssertEqual(asked.body, .hello(version: 17))
+        XCTAssertEqual(asked.body, .hello(version: Companion.version))
         queue()
         answer(remote, [info])
         XCTAssertEqual(result, .success(info))
