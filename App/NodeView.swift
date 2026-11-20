@@ -44,6 +44,7 @@ struct NodeView: View {
         NavigationStack {
             Form {
                 if model.records.me != nil && model.asksForPasskey && model.isConnected { choosePasskey }
+                if model.bluetoothLocked || model.records.me?.locked == 1 { lockedNotice }
                 SwiftUI.Section {
                     hero
                 }
@@ -277,8 +278,8 @@ struct NodeView: View {
                 } label: {
                     SettingRow(
                         title: "Bluetooth PIN", symbol: "lock", tint: Color(hex: 0xB45309),
-                        value: me.pairing.map(Self.pairingShort),
-                        valueColor: me.pairing == NodeSelf.pairingDefault ? .warn : .secondary)
+                        value: me.locked == 1 ? "Locked" : me.pairing.map(Self.pairingShort),
+                        valueColor: me.locked == 1 || me.pairing == NodeSelf.pairingDefault ? .warn : .secondary)
                 }
             }
         }
@@ -476,10 +477,35 @@ struct NodeView: View {
         .accessibilityAddTraits(role == current ? .isSelected : [])
     }
 
+    /// Said while the node's Bluetooth is locked (companion version 17): over Bluetooth it changes
+    /// nothing, and only USB or one of its owners over the mesh unlocks it.
+    private var lockedNotice: some View {
+        SwiftUI.Section {
+            Label(Words.error(ErrorCode.locked), systemImage: "lock.fill")
+                .foregroundStyle(Color.warn)
+        } header: {
+            Text("Bluetooth locked")
+        } footer: {
+            Text("This app can see the node, but cannot change it or read what it holds while it is locked. "
+                + "An owner unlocks it from Manage, on their own node's contact for it.")
+        }
+    }
+
     /// How the node pairs, and choosing another PIN.
     @ViewBuilder
     private var pin: some View {
         if let me = model.records.me {
+            if let locked = me.locked {
+                SwiftUI.Section {
+                    Text(Words.locked(locked))
+                        .foregroundStyle(locked == 1 ? Color.warn : Color.primary)
+                } header: {
+                    Text("Bluetooth lock")
+                } footer: {
+                    Text("An owner of this node can lock its Bluetooth over the mesh. While it is locked, nothing "
+                        + "paired with it over Bluetooth can change it.")
+                }
+            }
             // How the node pairs, from a node of version 11 or later: before it, SELF does not say.
             if let pairing = me.pairing {
                 SwiftUI.Section("Pairs with") {

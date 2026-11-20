@@ -59,6 +59,8 @@ public enum Words {
         case ErrorCode.notThere: "The node is not where the update was."
         case ErrorCode.notAnImage: "That is not firmware this node runs, or it is not signed by a key this node trusts."
         case ErrorCode.notAContact: "That address is not one of the node's contacts."
+        case ErrorCode.notOverMesh: "The node does not do that over the mesh: only over USB or Bluetooth."
+        case ErrorCode.locked: "The node's Bluetooth is locked. Only USB, or one of its owners over the mesh, can unlock it."
         default: "The node refused (\(code))."
         }
     }
@@ -200,6 +202,69 @@ public enum Words {
         case .closed: "Not connected."
         case .invalid: "Too long."
         }
+    }
+
+    /// A request to a managed node that came to nothing.
+    public static func manage(_ why: ManageFailure) -> String {
+        switch why {
+        case let .refused(code): error(code)
+        case let .manager(f): failure(f)
+        case .unsupported: "That node's version does not support this."
+        case .notDelivered: "Not delivered: your node could not reach that node over the mesh."
+        case .noAnswer:
+            "No answer. A node answers only its owners: check that your node is one of its owners, then try again."
+        case .cancelled: "Stopped."
+        }
+    }
+
+    /// Where a request to a managed node is on its way, as its `STATE` says, and how many times it
+    /// has been sent.
+    public static func manageProgress(_ state: UInt8?, tries: Int) -> String {
+        let again = tries > 1 ? " (try \(tries) of \(Remote.tries))" : ""
+        switch state {
+        case MessageState.delivered?: return "Delivered, waiting for its answer" + again
+        case MessageState.notDelivered?: return "Not delivered yet" + again
+        case MessageState.sent?: return "Sent over the mesh" + again
+        default: return "Asking your node to send it" + again
+        }
+    }
+
+    /// Said once a setting changed over the mesh is on trial, until it is confirmed.
+    public static func onTrial(minutes: Int) -> String {
+        "On trial: the node goes back to its old setting in \(minutes) min unless it hears from an owner again. "
+            + "Tern confirms it at once by asking again."
+    }
+
+    /// Said while a managed node restarts to apply a role or a power, before it is asked again.
+    public static let restartSettle = "The node restarts to apply it; confirming once it can answer."
+
+    /// Said once a setting changed over the mesh is confirmed.
+    public static let trialConfirmed = "Confirmed: the node heard from you again, and keeps the setting."
+
+    /// Said before a contact is made an owner of the user's node (`OWNER`).
+    public static func ownerWarning(_ name: String) -> String {
+        "\(name) will be able to manage your node from anywhere on the mesh: change its settings, choose "
+            + "whom it takes as contacts and owners, lock its Bluetooth and restart it. Make only someone you "
+            + "trust an owner. Your node holds at most \(Companion.owners) owners."
+    }
+
+    /// Said before a managed node's Bluetooth is locked (`SET` 10).
+    public static let lockWarning =
+        "While its Bluetooth is locked, a phone or computer paired with the node can only see that it is there: "
+        + "it can change nothing. Only USB and the node's owners, over the mesh, can unlock it."
+
+    /// What `SELF`'s `locked` says.
+    public static func locked(_ locked: UInt8) -> String {
+        locked == 1 ? "Locked: only USB and its owners can change it" : "Unlocked"
+    }
+
+    /// An `OWNER_CHANGED`, in words: `contact` and `node` are the names the user knows them by, and
+    /// `you` whether the contact is the user's own node.
+    public static func ownerChanged(_ change: OwnerChange, contact: String, node: String, you: Bool) -> String {
+        let who = you ? "Your node" : contact
+        let what = change.owner == 1 ? "was made an owner of" : "is no longer an owner of"
+        let how = change.by == OwnerChange.byMesh ? "over the mesh" : "at the node"
+        return "\(who) \(what) \(node), \(how)."
     }
 
     /// `ASKED`'s `why`.

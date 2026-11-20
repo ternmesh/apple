@@ -1,11 +1,14 @@
-// The companion protocol's frames, version 16: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 17: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 15 is this without forgetting (the requests
+    /// The version this client speaks. Version 16 is this without managing (the requests
+    /// `MANAGE`, `OWNER` and `RESTART`, the setting 10, errors 13 and 14, the news `MANAGED` and
+    /// `OWNER_CHANGED`, `CONTACT`'s `owner` and `SELF`'s `locked`). Version 15 is version 16 without
+    /// forgetting (the requests
     /// `FORGET` and `FORGET_GROUP`, and the news `FORGOTTEN` and `GROUP_FORGOTTEN`). Version 14 is
     /// version 15 without sleeping (the settings 8 and 9, the news `SLEEP`, and `CONTACT`'s `wake`). Version 13 is this with routing ids made from the address
     /// itself, not from a key blinded from it (RoutingNames.swift); its frames are the same.
@@ -23,7 +26,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 16
+    public static let version: UInt8 = 17
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -40,6 +43,7 @@ public enum Companion {
         case 0x37: 13
         case 0x95: 15
         case 0x12, 0x28, 0x96...0x97: 16
+        case 0x13, 0x14, 0x38, 0x98...0x99: 17
         default: 0
         }
     }
@@ -80,6 +84,18 @@ public enum Companion {
     public static let refs = 16
     /// The fewest `FORGOTTEN` and `GROUP_FORGOTTEN` records a node keeps (version 16).
     public static let forgottenKept = 16
+    /// A `MANAGE`'s `request` and a `MANAGED`'s `answer`, at most, in bytes (draft/managing.md's
+    /// `REQUEST_MAX` and `ANSWER_MAX`).
+    public static let requestMax = 128
+    public static let answerMax = 128
+    /// The owners a node holds, at most (`OWNERS`).
+    public static let owners = 4
+    /// How long a client waits for a managed node's answer once its manager says the request was
+    /// delivered, in seconds (`MESH_ANSWER_WAIT`).
+    public static let meshAnswerWait = 120.0
+    /// How long a `SET` over the mesh is on trial after it is answered, in seconds (`TRIAL`): the
+    /// node takes the old value back unless an owner asks it something more over the mesh.
+    public static let trial = 900.0
     /// The least time between two `ASKED`s for one address, or two of `NEIGHBOUR`, `AIRTIME` or
     /// `POWER`, or two `FIX`es for a fix that moved, in seconds.
     public static let quiet = 10.0
@@ -177,6 +193,11 @@ public enum ErrorCode {
     public static let notAnImage: UInt8 = 11
     /// Not a contact: `SHARE` to an address the node does not hold as one.
     public static let notAContact: UInt8 = 12
+    /// Not over the mesh: a request a managed node does not act on for its owners (version 17).
+    public static let notOverMesh: UInt8 = 13
+    /// Locked: the node's Bluetooth is locked, and it acts only on `HELLO` and `PING` over it
+    /// (version 17).
+    public static let locked: UInt8 = 14
 }
 
 /// A frame: its sequence number and what it says. The type byte follows from the body.
@@ -211,6 +232,10 @@ public enum Setting: Equatable, Sendable {
     /// How long the node listens after each poll, in seconds, from `Sleep.listenMin` to 255.
     /// Only as the user asks (version 15).
     case listen(UInt8)
+    /// 1 to lock the node's Bluetooth, 0 to unlock it: a node refuses any other value. While
+    /// locked, it acts on nothing over Bluetooth but `HELLO` and `PING`; only USB and its owners
+    /// over the mesh unlock it. Only as the user asks, after saying so (version 17).
+    case lock(UInt8)
 
     var number: UInt8 {
         switch self {
@@ -223,6 +248,7 @@ public enum Setting: Equatable, Sendable {
         case .receiver: 7
         case .wake: 8
         case .listen: 9
+        case .lock: 10
         }
     }
 
@@ -234,6 +260,7 @@ public enum Setting: Equatable, Sendable {
         case 5, 6: 6
         case 7: 8
         case 8, 9: 15
+        case 10: 17
         default: 0
         }
     }
@@ -261,6 +288,9 @@ public struct NodeSelf: Equatable, Sendable {
     /// How the node is paired: `NodeSelf.pairingShown`, `pairingDefault` or `pairingSet`. From a
     /// `SELF` of version 11 or later: nil before.
     public var pairing: UInt8?
+    /// 1 while the node's Bluetooth is locked (`SET` 10), 0 if not. From a `SELF` of version 17 or
+    /// later: nil before.
+    public var locked: UInt8?
 
     /// `pairing`: the node shows a new passkey on its screen for each pairing.
     public static let pairingShown: UInt8 = 0
@@ -272,7 +302,7 @@ public struct NodeSelf: Equatable, Sendable {
 
     public init(
         address: Address, role: UInt8, region: String, power: Int8, time: UInt32, cards: UInt8? = nil,
-        cardName: String? = nil, most: UInt8? = nil, pairing: UInt8? = nil
+        cardName: String? = nil, most: UInt8? = nil, pairing: UInt8? = nil, locked: UInt8? = nil
     ) {
         self.address = address
         self.role = role
@@ -283,6 +313,7 @@ public struct NodeSelf: Equatable, Sendable {
         self.cardName = cardName
         self.most = most
         self.pairing = pairing
+        self.locked = locked
     }
 }
 
@@ -296,13 +327,42 @@ public struct Contact: Equatable, Sendable {
     /// shares with it; 0 if it does not, has said nothing, or there is no session. From a
     /// `CONTACT` of version 15 or later: nil before.
     public var wake: UInt16?
+    /// 1 if the contact is one of the node's owners, who may manage it over the mesh, 0 if not.
+    /// From a `CONTACT` of version 17 or later: nil before.
+    public var owner: UInt8?
 
-    public init(address: Address, session: UInt8, name: String, wake: UInt16? = nil) {
+    public init(address: Address, session: UInt8, name: String, wake: UInt16? = nil, owner: UInt8? = nil) {
         self.address = address
         self.session = session
         self.name = name
         self.wake = wake
+        self.owner = owner
     }
+
+    /// Whether it is one of the node's owners.
+    public var isOwner: Bool { owner == 1 }
+}
+
+/// `OWNER_CHANGED`: the node at `from` said, in a notice to its owners, that `contact` became one
+/// of them (`owner` 1) or stopped being one (0), over a link to that node, USB or Bluetooth (`by`
+/// 0), or by one of its owners over the mesh (1).
+public struct OwnerChange: Equatable, Sendable {
+    public var from: Address
+    public var contact: Address
+    public var owner: UInt8
+    public var by: UInt8
+
+    public init(from: Address, contact: Address, owner: UInt8, by: UInt8) {
+        self.from = from
+        self.contact = contact
+        self.owner = owner
+        self.by = by
+    }
+
+    /// `by`: at the node, over USB or Bluetooth.
+    public static let byLink: UInt8 = 0
+    /// `by`: by one of its owners over the mesh.
+    public static let byMesh: UInt8 = 1
 }
 
 /// `STATE`: where a message is, and what it waits for.
@@ -637,7 +697,7 @@ public struct NodeFix: Equatable, Sendable {
     public var has: Bool { source != NodeFix.noSource }
 }
 
-/// What a frame says: every frame of version 16.
+/// What a frame says: every frame of version 17.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -656,6 +716,13 @@ public enum Body: Equatable, Sendable {
     /// good. Only ever at the user's asking, after saying so, with the greatest `id` shown to the
     /// user in that conversation (version 16).
     case forget(contact: Address, through: UInt32)
+    /// Send `request`, one companion request frame, to the node at `to` over the mesh, to manage
+    /// it (`Managing`). `ref` is as for `send`. Answered `QUEUED`, and `STATE` news with that `id`
+    /// says what became of it on the air; the answer comes back as `MANAGED` (version 17).
+    case manage(ref: UInt32, to: Address, request: [UInt8])
+    /// Make the contact `address` one of the node's owners (`owner` 1), or not (0). Only ever at the
+    /// user's asking, after saying what an owner can do (version 17).
+    case owner(address: Address, owner: UInt8)
     case saveContact(address: Address, name: String)
     case removeContact(address: Address)
     case endSession(address: Address)
@@ -689,6 +756,9 @@ public enum Body: Equatable, Sendable {
     /// bonds, after which it starts again as a new node with a new address. Answered `OK` first.
     /// Only ever at the user's asking, after saying what goes (version 13).
     case wipe
+    /// Restart the node, which answers `OK` first: every connection drops, and a client connects
+    /// again (version 17).
+    case restart
     /// The client's position: `lat` and `lon` in 10^-7 degree, WGS 84; `altitude` in metres, or
     /// `Position.noAltitude`; `accuracy` in metres, 0 for none; `age` in seconds.
     case setPosition(lat: Int32, lon: Int32, altitude: Int16, accuracy: UInt16, age: UInt16)
@@ -753,6 +823,11 @@ public enum Body: Equatable, Sendable {
     case forgotten(contact: Address, through: UInt32)
     /// The user forgot every group message to `group` whose `id` is `through` or less.
     case groupForgotten(group: GroupID, through: UInt32)
+    /// What the node at `from` answered a `MANAGE`: companion frames, each after a `u8` length,
+    /// which `Managing.unpack` reads. Not a record (version 17).
+    case managed(from: Address, answer: [UInt8])
+    /// The node at `from` said its owners changed (version 17). Not a record.
+    case ownerChanged(OwnerChange)
 
     /// The type byte.
     public var type: UInt8 {
@@ -766,6 +841,8 @@ public enum Body: Equatable, Sendable {
         case .send: 0x10
         case .read: 0x11
         case .forget: 0x12
+        case .manage: 0x13
+        case .owner: 0x14
         case .saveContact: 0x18
         case .removeContact: 0x19
         case .endSession: 0x1A
@@ -786,6 +863,7 @@ public enum Body: Equatable, Sendable {
         case .shareGroup: 0x35
         case .updateBootloader: 0x36
         case .wipe: 0x37
+        case .restart: 0x38
         case .ok: 0x40
         case .error: 0x41
         case .info: 0x42
@@ -818,6 +896,8 @@ public enum Body: Equatable, Sendable {
         case .sleep: 0x95
         case .forgotten: 0x96
         case .groupForgotten: 0x97
+        case .managed: 0x98
+        case .ownerChanged: 0x99
         }
     }
 
@@ -833,6 +913,8 @@ public enum Body: Equatable, Sendable {
         case .send: "SEND"
         case .read: "READ"
         case .forget: "FORGET"
+        case .manage: "MANAGE"
+        case .owner: "OWNER"
         case .saveContact: "SAVE_CONTACT"
         case .removeContact: "REMOVE_CONTACT"
         case .endSession: "END_SESSION"
@@ -853,6 +935,7 @@ public enum Body: Equatable, Sendable {
         case .shareGroup: "SHARE_GROUP"
         case .updateBootloader: "UPDATE_BOOTLOADER"
         case .wipe: "WIPE"
+        case .restart: "RESTART"
         case .ok: "OK"
         case .error: "ERROR"
         case .info: "INFO"
@@ -885,6 +968,8 @@ public enum Body: Equatable, Sendable {
         case .sleep: "SLEEP"
         case .forgotten: "FORGOTTEN"
         case .groupForgotten: "GROUP_FORGOTTEN"
+        case .managed: "MANAGED"
+        case .ownerChanged: "OWNER_CHANGED"
         }
     }
 }

@@ -275,6 +275,162 @@ final class ConnectionTests: XCTestCase {
         XCTAssertNotNil(link.connection.records.sleep, "version 15 is told of sleeping")
     }
 
+    /// A client of version 16 is sent a `CONTACT` without `owner`, and does not send `OWNER`,
+    /// which its version does not define.
+    func testOlderVersion16() throws {
+        let older = v["older"]!.array.first { $0["version"]!.int == 16 }!
+        let frames = older["frames"]!.array
+        XCTAssertEqual(frames[frames.count - 2]["type"]!.string, "OWNER")
+        let link = Link(Connection(version: 16, now: { 0 }, wallTime: nil))
+        XCTAssertEqual(link.replay(Array(frames.dropLast(2))), [])
+        XCTAssertEqual(link.connection.agreed, 16)
+        var result: Result<Body, RequestFailure>?
+        link.connection.submit(try Frame.decode(frames[frames.count - 2]["frame"]!.bytes).body) { result = $0 }
+        XCTAssertEqual(result, .failure(.unsupported))
+        XCTAssertEqual(link.out, [])
+        XCTAssertTrue(link.connection.records.contacts.values.allSatisfy { $0.owner == nil })
+        XCTAssertNil(link.connection.records.me?.locked)
+    }
+
+    /// Managing, as in the specification's `manage`, request by request: the node refuses an owner
+    /// that is not a contact or neither 0 nor 1, and a `MANAGE` to itself or of nothing; the owner
+    /// made is its contact's `owner`; each `MANAGE` is queued like a message, and the managed node's
+    /// answers come back as `MANAGED`.
+    func testManage() throws {
+        let link = Link(Connection(now: { 0 }, wallTime: { 1_790_000_000 }))
+        var answers: [Result<Body, RequestFailure>] = []
+        link.connection.open()
+        for f in v["manage"]!.array where f["from"]!.string == "client" {
+            let body = try Frame.decode(f["frame"]!.bytes).body
+            if case .hello = body { continue }
+            link.connection.submit(body) { answers.append($0) }
+        }
+        try playManage(link, refs: true)
+        XCTAssertEqual(answers.count, 12)
+        XCTAssertEqual(Array(answers.prefix(2)), [
+            .failure(.refused(code: ErrorCode.notAContact)), .failure(.refused(code: ErrorCode.refused)),
+        ])
+        XCTAssertEqual(Array(answers[3...4]), [
+            .failure(.refused(code: ErrorCode.badAddress)), .failure(.refused(code: ErrorCode.refused)),
+        ])
+        XCTAssertEqual(answers.last, .success(.ok), "RESTART is answered, before the node restarts")
+        let bob = Address(hex: "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c")!
+        XCTAssertEqual(link.connection.records.contacts[bob]?.owner, 1)
+        let news = link.events.compactMap { if case let .news(body) = $0 { body } else { nil } }
+        XCTAssertEqual(news.filter { if case .managed = $0 { true } else { false } }.count, 7)
+        XCTAssertEqual(news.filter { if case .ownerChanged = $0 { true } else { false } }.count, 1)
+        XCTAssertTrue(link.connection.records.items.isEmpty, "the node keeps no record of a MANAGE")
+    }
+
+    /// The same, with a `Remote` asking the managed node: it says `HELLO` first, syncs, sets the
+    /// power and confirms it with a `PING` on its own, is refused a `SEND`, and restarts the node,
+    /// each in a `MANAGE` that carries the frame the specification's does.
+    func testManageWithARemote() throws {
+        let frames = v["manage"]!.array
+        let link = Link(Connection(now: { 0 }, wallTime: { 1_790_000_000 }))
+        let c = link.connection
+        let bob = Address(hex: "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c")!
+        let ada = Address(hex: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")!
+        var time = 0.0
+        let remote = Remote(address: bob, now: { time }, submit: { c.submit($0, then: $1) })
+        c.onEvent = { [unowned link] event in
+            link.events.append(event)
+            if case let .news(body) = event { remote.take(body) }
+        }
+        c.open()
+        // The client's own requests, before it manages.
+        var local: [Result<Body, RequestFailure>] = []
+        for f in frames where f["from"]!.string == "client" {
+            let body = try Frame.decode(f["frame"]!.bytes).body
+            switch body {
+            case .owner: c.submit(body) { local.append($0) }
+            case let .manage(_, to, request) where to != bob || request.isEmpty: c.submit(body) { local.append($0) }
+            default: continue
+            }
+        }
+        var results: [Result<Body, ManageFailure>] = []
+        remote.request(.sync(after: 0)) { results.append($0) }
+        remote.request(.set(.power(10))) {
+            results.append($0)
+            XCTAssertNotNil(remote.trialEnds, "on trial until the PING is answered")
+        }
+        remote.request(.send(ref: 1, to: ada, text: "hello")) { results.append($0) }
+        remote.request(.restart) {
+            results.append($0)
+            c.submit(.restart) { local.append($0) }
+        }
+        var settled = false
+        try playManage(link, refs: false) {
+            // The node restarts to apply the power: the PING waits until it can answer.
+            if let end = remote.settleEnds {
+                XCTAssertEqual(end, time + Remote.restartSettle)
+                time = end - 1
+                remote.tick()
+                XCTAssertEqual(link.out, [], "nothing is sent while the node restarts")
+                time = end
+                remote.tick()
+                settled = true
+            }
+        }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(local.count, 6)
+        XCTAssertEqual(local.last, .success(.ok))
+        XCTAssertEqual(results, [
+            .success(.synced(news: 9)), .success(.ok), .failure(.refused(code: ErrorCode.notOverMesh)), .success(.ok),
+        ])
+        XCTAssertNil(remote.trialEnds, "the PING confirmed the power")
+        XCTAssertFalse(remote.isBusy)
+        XCTAssertNil(remote.nodeVersion, "the node restarted: the next request says HELLO again")
+        XCTAssertEqual(remote.firmware, "tern 0.2.0 heltec-v3")
+        XCTAssertTrue(remote.synced)
+        XCTAssertEqual(remote.records.me?.address, bob)
+        XCTAssertEqual(remote.records.me?.locked, 0)
+        XCTAssertEqual(remote.records.contacts.keys.sorted { $0.description < $1.description }, [ada])
+        XCTAssertEqual(remote.records.contacts[ada]?.owner, 1)
+        XCTAssertEqual(remote.records.neighbours.count, 3)
+        XCTAssertNotNil(remote.records.airtime)
+        XCTAssertNotNil(remote.records.power)
+        XCTAssertNotNil(remote.records.sleep)
+        XCTAssertTrue(remote.records.items.isEmpty)
+    }
+
+    /// Plays the node's half of the specification's `manage` against `link`, and checks the
+    /// client sends its half. The client also sets the clock and syncs after `HELLO`, which the
+    /// file leaves out: those are answered here, and the client's seqs run two past the file's. A
+    /// `MANAGE`'s `ref` is checked only with `refs`: a `Remote` draws its own.
+    private func playManage(
+        _ link: Link, refs: Bool, afterEach: () -> Void = {}, file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        let c = link.connection
+        for f in v["manage"]!.array {
+            XCTAssertLessThanOrEqual(link.out.count, 1, "two requests at once", file: file, line: line)
+            var bytes = f["frame"]!.bytes
+            // HELLO and its INFO come before the clock and the sync, and keep their seq.
+            let shift: UInt8 = bytes[0] == 0x01 || bytes[0] == 0x42 ? 0 : 2
+            if f["from"]!.string == "client" {
+                bytes[1] &+= shift
+                var got = link.out.first ?? []
+                if !refs, bytes[0] == 0x13, got.count > 6 {
+                    bytes.replaceSubrange(2..<6, with: [0, 0, 0, 0])
+                    got.replaceSubrange(2..<6, with: [0, 0, 0, 0])
+                }
+                XCTAssertEqual(Hex.encode(got), Hex.encode(bytes), f["type"]!.string, file: file, line: line)
+                if !link.out.isEmpty { link.out.removeFirst() }
+            } else {
+                if bytes[0].isAnswerType { bytes[1] &+= shift }
+                c.receive(bytes)
+                if f["type"]!.string == "INFO" {
+                    for answer in [Body.ok, .synced(news: 0)] {
+                        let request = try Frame.decode(link.out.removeFirst())
+                        c.receive(try Frame(seq: request.seq, body: answer).encode())
+                    }
+                }
+                afterEach()
+            }
+        }
+        XCTAssertEqual(link.out, [], file: file, line: line)
+    }
+
     /// Forgetting, as in the specification's `forget`: the client forgets Bob's conversation while
     /// a message to him waits, and the group's, and holds only what came after; a client that held
     /// every item through 21 is told at its sync what was forgotten, and keeps none of it.
@@ -340,16 +496,16 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["SYNC"], "the sync missed news")
     }
 
-    /// The client says version 16 in `HELLO`, and speaks the lesser of it and the node's.
-    func testHelloSaysSixteen() throws {
-        XCTAssertEqual(Companion.version, 16)
-        for nodeVersion: UInt8 in [11, 12, 13, 14, 15, 16, 17] {
+    /// The client says version 17 in `HELLO`, and speaks the lesser of it and the node's.
+    func testHelloSaysSeventeen() throws {
+        XCTAssertEqual(Companion.version, 17)
+        for nodeVersion: UInt8 in [11, 12, 13, 14, 15, 16, 17, 18] {
             let node = Node()
             node.version = nodeVersion
             node.connection.open()
-            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 16))
+            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 17))
             node.answerAll()
-            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 16))
+            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 17))
         }
     }
 
@@ -1195,6 +1351,11 @@ private final class Node {
         // sleep.
         if case var .contact(c) = body, c.wake == nil, min(version, connection.version) >= 15 {
             c.wake = 0
+            body = .contact(c)
+        }
+        // And, from version 17, with `owner`.
+        if case var .contact(c) = body, c.owner == nil, min(version, connection.version) >= 17 {
+            c.owner = 0
             body = .contact(c)
         }
         connection.receive(try! Frame(seq: newsCount, body: body).encode())

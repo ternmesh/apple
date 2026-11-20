@@ -92,6 +92,7 @@ final class RecordsFileTests: XCTestCase {
         r.me?.cardName = "Ada"
         r.me?.most = 1
         r.me?.pairing = nil
+        r.me?.locked = nil
         let back = Records(decoding: r.encoded())
         XCTAssertEqual(back, r)
         XCTAssertEqual(back.me?.cardName, "Ada")
@@ -108,6 +109,7 @@ final class RecordsFileTests: XCTestCase {
         r.me?.cardName = "Ada"
         r.me?.most = nil
         r.me?.pairing = nil
+        r.me?.locked = nil
         let back = Records(decoding: r.encoded())
         XCTAssertEqual(back, r)
         XCTAssertEqual(back.me?.cards, 1)
@@ -124,6 +126,7 @@ final class RecordsFileTests: XCTestCase {
         r.me?.cardName = nil
         r.me?.most = nil
         r.me?.pairing = nil
+        r.me?.locked = nil
         let file = r.encoded()
         let me = try Frame(seq: 0, body: .nodeSelf(r.me!)).encode()
         XCTAssertEqual(Array(file[11..<12 + me.count]), [UInt8(me.count)] + me, "SELF is the first entry, and ends at time")
@@ -163,6 +166,37 @@ final class RecordsFileTests: XCTestCase {
         empty.syncedVersion = 14
         let file = empty.encoded() + [UInt8(old.count)] + old
         XCTAssertEqual(Records(decoding: file).contacts[bob], Contact(address: bob, session: 1, name: "Bob"))
+    }
+
+    /// A CONTACT and a SELF of version 16, without `owner` and `locked`, read as version 16's; and
+    /// the owner and the lock are kept.
+    func testAContactAndASelfOfVersion16AreRead() throws {
+        let bob = Address([UInt8](repeating: 0xB0, count: 32))!
+        let contact = Contact(address: bob, session: 1, name: "Bob", wake: 600)
+        let me = NodeSelf(
+            address: Address([UInt8](repeating: 0xAD, count: 32))!, role: 1, region: "EU868", power: 14, time: 0,
+            cards: 0, cardName: "", most: 0, pairing: 1)
+        var empty = Records()
+        empty.syncedVersion = 16
+        var file = empty.encoded()
+        for body in [Body.nodeSelf(me), .contact(contact)] {
+            let old = try Frame(seq: 0, body: body).encode()
+            file += [UInt8(old.count)] + old
+        }
+        let read = Records(decoding: file)
+        XCTAssertEqual(read.contacts[bob], contact)
+        XCTAssertEqual(read.me, me)
+
+        var r = Records()
+        var owner = contact
+        owner.owner = 1
+        var locked = me
+        locked.locked = 1
+        r.apply(.contact(owner))
+        r.apply(.nodeSelf(locked))
+        let back = Records(decoding: r.encoded())
+        XCTAssertEqual(back.contacts[bob]?.owner, 1)
+        XCTAssertEqual(back.me?.locked, 1)
     }
 
     func testWhatWasMissedAndTheVersionAreKept() throws {

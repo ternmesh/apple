@@ -76,5 +76,9 @@ jobs:
             echo "::warning::Tests/TernKitTests/vectors/routing.json differs from the specification's. Copy the new file in the pull request that changes the code to match."
           fi
           cp spec/vectors/routing.json Tests/TernKitTests/vectors/routing.json
+          if ! cmp -s spec/vectors/managing.json Tests/TernKitTests/vectors/managing.json; then
+            echo "::warning::Tests/TernKitTests/vectors/managing.json differs from the specification's. Copy the new file in the pull request that changes the code to match."
+          fi
+          cp spec/vectors/managing.json Tests/TernKitTests/vectors/managing.json
       - run: apt-get update && apt-get install -y libsodium-dev pkg-config
       - run: swift test

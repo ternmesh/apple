@@ -20,6 +20,10 @@ struct PeopleView: View {
     @State private var showing: Contact?
     /// A contact the user asked to remove, whose chat could go too: as it was shown when they asked.
     @State private var removing: ForgetRequest?
+    /// A contact the user asked to make an owner of their node, until they confirm.
+    @State private var owning: Contact?
+    /// A contact whose node the user manages over the mesh.
+    @State private var managing: Address?
 
     var body: some View {
         NavigationStack {
@@ -52,6 +56,14 @@ struct PeopleView: View {
                             Button("Show Code") { showing = c }
                             ShareLink(item: Sharing.link(c.address))
                             Button("Copy Address") { copyToClipboard(Sharing.text(c.address)) }
+                            if model.speaksManaging {
+                                Button("Manage Their Node…") { managing = c.address }
+                                if c.isOwner {
+                                    Button("Remove as Owner") { model.setOwner(c.address, false) }
+                                } else if c.owner != nil {
+                                    Button("Make Owner…") { owning = c }
+                                }
+                            }
                             Button("Remove", role: .destructive) { remove(c) }
                         }
                         .swipeActions {
@@ -88,6 +100,12 @@ struct PeopleView: View {
                 CodeSheet(title: c.name.isEmpty ? c.address.short : c.name, address: c.address)
             }
             .savesAsked($saving)
+            .makesOwner($owning)
+            .navigationDestination(
+                isPresented: Binding(get: { managing != nil }, set: { if !$0 { managing = nil } })
+            ) {
+                if let managing { ManageView(node: model.managed(managing)) }
+            }
             // A client that offers to forget while it removes sends both, the forgetting first.
             .confirmationDialog(
                 "Remove \(removing?.name ?? "")?",
@@ -151,9 +169,12 @@ struct ContactRow: View {
             Avatar(name: name, key: contact.address.description)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).fontWeight(.semibold)
-                Text(contact.session == 1 ? "Secure" : "Not talked yet")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text(contact.session == 1 ? "Secure" : "Not talked yet")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    if contact.isOwner { Tag("Owner") }
+                }
             }
             Spacer()
             if let n = model.records.neighbours[model.records.routingId(of: contact.address)] {
