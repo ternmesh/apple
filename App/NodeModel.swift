@@ -5,6 +5,7 @@
 import Combine
 import CoreLocation
 import Foundation
+import SwiftUI
 import TernKit
 import UserNotifications
 #if os(iOS)
@@ -1400,7 +1401,7 @@ final class NodeModel: ObservableObject {
         guard let c = link.connection else { return }
         forgetArrivals(c.records)
         records = c.records
-        conversations = records.conversations
+        takeConversations()
         setUp = remembered.map { isSetUp($0, self.records) } ?? true
         showUnread()
         // An unanswered send that the records now show the node holding went: it needs no retry.
@@ -1409,6 +1410,19 @@ final class NodeModel: ObservableObject {
             outgoing.removeAll { $0.status == .unanswered && records.holdsSent($0.text, to: $0.peer, after: $0.after) }
         }
         markRead()
+    }
+
+    /// The conversations as the records now have them. One gone, as a chat deleted here or on another
+    /// client is, goes with an animation: the list takes it out as a deletion it animates, not in the
+    /// same unanimated update as whatever else changed.
+    private func takeConversations() {
+        let next = records.conversations
+        let kept = Set(next.map(\.peer))
+        if conversations.contains(where: { !kept.contains($0.peer) }) {
+            withAnimation { conversations = next }
+        } else {
+            conversations = next
+        }
     }
 
     /// Marks read what the user has seen: the conversation on screen while the app is in front,
