@@ -132,9 +132,8 @@ struct NodeStatusPill: View {
                 }
             }
             .font(.subheadline.weight(.semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            .fixedSize()
+            .modifier(PillBackground())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(model.nodeName ?? "No node"), \(words(model.linkState, turnedOff: model.turnedOff))")
@@ -146,6 +145,29 @@ struct NodeStatusPill: View {
         if case .failed = model.linkState { return .red }
         if model.disconnected || [.poweredOff, .unauthorized, .unsupported].contains(model.linkState) { return .red }
         return .warn
+    }
+}
+
+/// The pill's own capsule, where the bar draws none: from iOS 26 every bar item sits on glass of its
+/// own, and a capsule inside it shows as a ring around a dot with the name squeezed out.
+private struct PillBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 26, *) {
+            content.padding(.horizontal, 6)
+        } else {
+            capsule(content)
+        }
+        #else
+        capsule(content)
+        #endif
+    }
+
+    private func capsule(_ content: Content) -> some View {
+        content
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Capsule().fill(Color.secondary.opacity(0.12)))
     }
 }
 
