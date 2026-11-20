@@ -28,7 +28,9 @@ struct ManageView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Manage \(name)")
+        .onDisappear { node.shown -= 1 }
         .onAppear {
+            node.shown += 1
             if !node.synced && !node.isBusy { node.refresh() }
             power = Int(node.records.me?.power ?? 0)
         }
@@ -52,13 +54,10 @@ struct ManageView: View {
 
     private var status: some View {
         SwiftUI.Section {
-            if let working = node.working {
-                HStack(spacing: 10) {
-                    ProgressView()
-                    Text(working).foregroundStyle(.secondary)
-                }
-                Button("Stop Waiting", role: .destructive) { node.cancel() }
-                    .buttonStyle(.borderless)
+            if node.working != nil {
+                ManageProgress(node: node)
+            } else if node.notOwner {
+                Label(Words.notAnOwner(name), systemImage: "xmark.circle")
             } else if node.restarting {
                 Text("The node is restarting. Ask for its state again in a minute.").foregroundStyle(.secondary)
             } else if !node.synced {
@@ -67,8 +66,8 @@ struct ManageView: View {
             Button(node.synced ? "Ask for Its State Again" : "Ask for Its State") { node.refresh() }
                 .disabled(!canAsk)
         } footer: {
-            Text("Your node carries each request over the mesh, one at a time, and it may take a few minutes. "
-                + "A node answers only its owners: if yours is not one, nothing comes back.")
+            Text("Your node carries each request over the mesh, one at a time. It may take a few minutes, and longer "
+                + "for a node that sleeps. A node answers only its owners: if yours is not one, it says so, or says nothing.")
         }
     }
 

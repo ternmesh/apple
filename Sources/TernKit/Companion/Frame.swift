@@ -198,6 +198,9 @@ public enum ErrorCode {
     /// Locked: the node's Bluetooth is locked, and it acts only on `HELLO` and `PING` over it
     /// (version 17).
     public static let locked: UInt8 = 14
+    /// Not an owner: a managed node's answer to a request from anyone but its owners. It may not
+    /// say so, and say nothing instead, as a node did before it had this answer.
+    public static let notAnOwner: UInt8 = 15
 }
 
 /// A frame: its sequence number and what it says. The type byte follows from the body.

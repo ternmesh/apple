@@ -15,6 +15,8 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     private static let replyAction = "reply"
     private static let peerKey = "peer"
     private static let nodeKey = "node"
+    /// Set on a notification that opens the contact's Manage screen.
+    private static let manageKey = "manage"
 
     @MainActor private weak var model: NodeModel?
     /// Taps and replies that came before the model.
@@ -41,8 +43,10 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// What a notification of the conversation `peer` with the node `node` carries.
-    static func userInfo(_ peer: Peer, node: UUID) -> [String: String] {
-        [peerKey: peer.key, nodeKey: node.uuidString]
+    static func userInfo(_ peer: Peer, node: UUID, manage: Bool = false) -> [String: String] {
+        var info = [peerKey: peer.key, nodeKey: node.uuidString]
+        if manage { info[manageKey] = "1" }
+        return info
     }
 
     @MainActor private func handle(_ response: UNNotificationResponse) {
@@ -53,7 +57,7 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         else { return }
         switch response.actionIdentifier {
         case UNNotificationDefaultActionIdentifier:
-            model.open(peer, on: node)
+            model.open(peer, on: node, manage: info[Self.manageKey] as? String == "1")
         case Self.replyAction:
             if let text = (response as? UNTextInputNotificationResponse)?.userText {
                 model.reply(text, to: peer, on: node)

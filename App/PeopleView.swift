@@ -24,6 +24,8 @@ struct PeopleView: View {
     @State private var owning: Contact?
     /// A contact whose node the user manages over the mesh.
     @State private var managing: Address?
+    /// A contact whose node the user checks they are an owner of.
+    @State private var checking: Address?
 
     var body: some View {
         NavigationStack {
@@ -57,7 +59,11 @@ struct PeopleView: View {
                             ShareLink(item: Sharing.link(c.address))
                             Button("Copy Address") { copyToClipboard(Sharing.text(c.address)) }
                             if model.speaksManaging {
-                                Button("Manage Their Node…") { managing = c.address }
+                                ManageMenuItems(
+                                    address: c.address, manage: { managing = c.address }, check: {
+                                        model.checkOwner(c.address)
+                                        checking = c.address
+                                    })
                                 if c.isOwner {
                                     Button("Remove as Owner") { model.setOwner(c.address, false) }
                                 } else if c.owner != nil {
@@ -105,6 +111,11 @@ struct PeopleView: View {
                 isPresented: Binding(get: { managing != nil }, set: { if !$0 { managing = nil } })
             ) {
                 if let managing { ManageView(node: model.managed(managing)) }
+            }
+            .navigationDestination(
+                isPresented: Binding(get: { checking != nil }, set: { if !$0 { checking = nil } })
+            ) {
+                if let checking { OwnerCheckView(node: model.managed(checking)) }
             }
             // A client that offers to forget while it removes sends both, the forgetting first.
             .confirmationDialog(

@@ -68,9 +68,12 @@ public enum ManageFailure: Error, Equatable {
     case unsupported
     /// The request was not delivered, after every try.
     case notDelivered
-    /// The request was delivered, or may have been, but no answer came in time. A node answers only
-    /// its owners: to anyone else it is a node that cannot be managed.
+    /// The request was delivered, or may have been, but no answer came in time: the node may be
+    /// asleep or out of reach, or this client's node may not be one of its owners, to whom a node
+    /// may say nothing at all.
     case noAnswer
+    /// The managed node answered `ERROR` 15: this client's node is not one of its owners.
+    case notAnOwner
     /// Given up: the user left, or the link to the manager closed for good.
     case cancelled
 }
@@ -96,6 +99,15 @@ public final class Remote {
     /// What became of the request on its way, as `STATE` says: waiting, sent, delivered or not
     /// delivered; nil before the manager has said, or when nothing is asked.
     public private(set) var progress: UInt8?
+    /// Why the request waits, and for how long the manager thinks, in seconds, as its last `STATE`
+    /// says: 0 when it is not waiting, or has said nothing.
+    public private(set) var reason: UInt8 = 0
+    public private(set) var wait: UInt16 = 0
+    /// When the manager said the request was delivered, by `now`; nil before, and once answered.
+    public private(set) var deliveredAt: Double?
+    /// When the manager queued this try (`QUEUED`), by `now`; nil before. A keeper holding it for a
+    /// node that sleeps sends no `STATE` until the node wakes, so this may be all there is to go on.
+    public private(set) var queuedAt: Double?
     /// The request being asked now, and how many times it has been sent.
     public var asking: Body? { inFlight?.pending.body ?? queue.first?.body }
     public var tries: Int { inFlight?.tries ?? 0 }
@@ -104,6 +116,43 @@ public final class Remote {
     public var submit: (Body, @escaping (Result<Body, RequestFailure>) -> Void) -> Void
     /// Called whenever anything above changes.
     public var onChange: () -> Void = {}
+    /// Called with what an answer says of this client's node: an owner (true) when the managed node
+    /// answered anything, since it answers only its owners, and not one (false) when it answered
+    /// `ERROR` 15. No answer says nothing.
+    public var onOwner: (Bool) -> Void = { _ in }
+    /// How long the managed node sleeps between wakes, in seconds, as the client knows from
+    /// elsewhere: what its node holds of it as a contact (`CONTACT`'s `wake`). nil or 0 when nothing
+    /// says it sleeps. The node's own `SLEEP`, from a sync, says more, and comes first.
+    public var wakeHint: () -> UInt16? = { nil }
+
+    /// How a managed node that sleeps wakes: every `wake` seconds, listening `listen` after each.
+    public struct Wakes: Equatable, Sendable {
+        public var wake: Int
+        public var listen: Int
+        public init(wake: Int, listen: Int) {
+            self.wake = wake
+            self.listen = listen
+        }
+    }
+
+    /// How the managed node sleeps, if it is known to: from its last sync's `SLEEP`, asleep with a
+    /// keeper, else from `wakeHint`. nil when nothing says it sleeps: a node that listens all the
+    /// time, or one nothing is known of.
+    public var wakes: Wakes? {
+        if let s = records.sleep {
+            return s.state == Sleep.asleep && s.wake > 0 ? Wakes(wake: Int(s.wake), listen: Int(s.listen)) : nil
+        }
+        guard let w = wakeHint(), w > 0 else { return nil }
+        // Its listen is not known: at most 255 s.
+        return Wakes(wake: Int(w), listen: Int(UInt8.max))
+    }
+
+    /// How long, from when a request is sent, its answer may take to come back from a node that
+    /// sleeps: held by its keeper until it wakes, then answered while it listens, and then
+    /// `MESH_ANSWER_WAIT`. 0 for a node not known to sleep.
+    public var sleepWait: Double {
+        wakes.map { Double($0.wake + $0.listen) + Companion.meshAnswerWait } ?? 0
+    }
 
     /// The version both ends speak.
     public var agreed: UInt8? { nodeVersion.map { min($0, version) } }
@@ -168,6 +217,8 @@ public final class Remote {
         var tries: Int
         /// The `MANAGE`'s `id`, once the manager has queued it.
         var id: UInt32?
+        /// When this try was sent.
+        var sent: Double
         var deadline: Double
         var notDelivered = false
         var delivered = false
@@ -204,6 +255,13 @@ public final class Remote {
         pump()
     }
 
+    /// Says `HELLO` to the managed node, and nothing else: whether it answers says whether this
+    /// client's node is one of its owners. `then` has its `INFO`, or why there was none.
+    public func greet(then: @escaping (Result<Body, ManageFailure>) -> Void) {
+        queue.insert(Pending(kind: .hello, body: .hello(version: version), then: then), at: 0)
+        pump()
+    }
+
     /// Gives up on everything asked. A request already sent may still be acted on.
     public func cancel() {
         let all = (inFlight.map { [$0.pending] } ?? []) + queue
@@ -211,7 +269,7 @@ public final class Remote {
         settleEnds = nil
         queue = []
         syncing = nil
-        progress = nil
+        clearProgress()
         onChange()
         for p in all { p.then(.failure(.cancelled)) }
     }
@@ -223,14 +281,20 @@ public final class Remote {
         case let .state(s):
             guard var f = inFlight, f.id == s.id else { return }
             progress = s.state
+            reason = s.state == MessageState.waiting ? s.reason : 0
+            wait = s.state == MessageState.waiting ? s.wait : 0
+            // A node that sleeps answers once it wakes: until then, from when this try was sent.
+            let asleep = f.sent + sleepWait
             switch s.state {
             case MessageState.delivered:
+                if !f.delivered { deliveredAt = now() }
                 f.delivered = true
-                f.deadline = now() + Companion.meshAnswerWait
+                f.deadline = max(now() + Companion.meshAnswerWait, asleep)
             case MessageState.notDelivered:
-                // Its answer may still come, from a copy that arrived: a moment for it.
+                // Its answer may still come, from a copy that arrived: a moment for it, or, from a
+                // node that sleeps, which its keeper may still hold it for, until it has woken.
                 f.notDelivered = true
-                f.deadline = now() + Self.lateAnswer
+                f.deadline = max(now() + Self.lateAnswer, asleep)
             default:
                 break
             }
@@ -257,7 +321,7 @@ public final class Remote {
             return
         }
         inFlight = nil
-        progress = nil
+        clearProgress()
         if f.pending.kind == .hello { failAll(f.delivered ? .noAnswer : .notDelivered, first: f.pending) }
         else { finish(f.pending, .failure(f.delivered ? .noAnswer : .notDelivered)) }
     }
@@ -275,11 +339,18 @@ public final class Remote {
         }
         guard body.type.isAnswerType, let f = inFlight, frame.seq == f.seq else { return }
         inFlight = nil
-        progress = nil
+        clearProgress()
         answer(f.pending, body)
     }
 
     private func answer(_ p: Pending, _ body: Body) {
+        if body == .error(code: ErrorCode.notAnOwner) {
+            // Not an owner: nothing else asked will be answered either, nor is it worth asking again.
+            onOwner(false)
+            return failAll(.notAnOwner, first: p)
+        }
+        // Any other answer came from a node that answers only its owners.
+        onOwner(true)
         // Any request answered reached the node from an owner, which ends a trial; a `SET` that
         // the node takes starts its own, below.
         trialEnds = nil
@@ -288,6 +359,7 @@ public final class Remote {
             nodeVersion = v
             firmware = fw
             onChange()
+            p.then(.success(body))
             pump()
         case let (.hello, .error(code)):
             failAll(.refused(code: code), first: p)
@@ -368,25 +440,37 @@ public final class Remote {
         send(p, seq: seq, frame: frame, tries: 1)
     }
 
+    private func clearProgress() {
+        progress = nil
+        reason = 0
+        wait = 0
+        deliveredAt = nil
+        queuedAt = nil
+    }
+
     /// Sends `frame` in a new `MANAGE`: a request tried again goes as a new message, the same frame
     /// with the same `seq`, so the node acts on whichever arrives and answers it the same.
     private func send(_ p: Pending, seq: UInt8, frame: [UInt8], tries: Int) {
         attempt += 1
         let mine = attempt
+        // A node that sleeps may hold it longer than `deliveryWait` before it is delivered.
         inFlight = InFlight(
-            pending: p, seq: seq, frame: frame, attempt: mine, tries: tries, deadline: now() + Self.deliveryWait)
-        progress = nil
+            pending: p, seq: seq, frame: frame, attempt: mine, tries: tries, sent: now(),
+            deadline: now() + max(Self.deliveryWait, sleepWait))
+        clearProgress()
         onChange()
         submit(.manage(ref: .random(in: 1...UInt32.max), to: address, request: frame)) { [weak self] result in
             guard let self, let f = self.inFlight, f.attempt == mine else { return }
             switch result {
             case let .success(.queued(id)):
                 self.inFlight?.id = id
+                self.queuedAt = self.now()
+                self.onChange()
             case .success:
                 break
             case let .failure(failure):
                 self.inFlight = nil
-                self.progress = nil
+                self.clearProgress()
                 if f.pending.kind == .hello {
                     self.failAll(.manager(failure), first: f.pending)
                 } else {

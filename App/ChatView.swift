@@ -23,10 +23,19 @@ struct ChatView: View {
     @State private var showingCode = false
     /// The Manage screen of the contact's node, over the mesh.
     @State private var managing = false
+    /// The check that the user's node is an owner of the contact's.
+    @State private var checking = false
     /// A contact the user asked to make an owner of their node, until they confirm.
     @State private var owning: Contact?
 
     private static let end = "end"
+
+    /// A notification of being an owner, tapped, opens the contact's Manage screen.
+    private func openManageIfAsked() {
+        guard case let .contact(address) = peer, model.manageRequested == address else { return }
+        model.manageRequested = nil
+        managing = true
+    }
 
     var body: some View {
         let conversation = model.records.conversation(with: peer)
@@ -59,7 +68,11 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) { menu(conversation) }
         }
-        .onAppear { model.visible = peer }
+        .onAppear {
+            model.visible = peer
+            openManageIfAsked()
+        }
+        .onChange(of: model.manageRequested) { _ in openManageIfAsked() }
         .onDisappear { if model.visible == peer { model.visible = nil } }
         .alert(title, isPresented: $naming) {
             TextField("Name", text: $name)
@@ -94,6 +107,9 @@ struct ChatView: View {
         .makesOwner($owning)
         .navigationDestination(isPresented: $managing) {
             if case let .contact(address) = peer { ManageView(node: model.managed(address)) }
+        }
+        .navigationDestination(isPresented: $checking) {
+            if case let .contact(address) = peer { OwnerCheckView(node: model.managed(address)) }
         }
         .confirmationDialog("End the session?", isPresented: $ending, titleVisibility: .visible) {
             Button("End Session", role: .destructive) {
@@ -249,7 +265,10 @@ struct ChatView: View {
             // Owners and managing, for a node of version 17: the contact is a node too.
             if model.speaksManaging, let contact {
                 Divider()
-                Button("Manage Their Node…") { managing = true }
+                ManageMenuItems(address: address, manage: { managing = true }, check: {
+                    model.checkOwner(address)
+                    checking = true
+                })
                 if contact.isOwner {
                     Button("Remove as Owner of Your Node") { model.setOwner(address, false) }
                 } else if contact.owner != nil {
