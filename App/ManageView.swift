@@ -139,7 +139,7 @@ struct ManageView: View {
                 Button("Send at the Most It May") { node.set(.power(Companion.powerMost)) }
             }
             if v >= 6, let cards = me.cards {
-                Toggle("Send a presence card", isOn: Binding(get: { cards == 1 }, set: { node.set(.cards($0 ? 1 : 0)) }))
+                Toggle("Show its card to nodes nearby", isOn: Binding(get: { cards == 1 }, set: { node.set(.cards($0 ? 1 : 0)) }))
             }
             if v >= 8, let f = node.records.fix, f.receiver != NodeFix.none {
                 Toggle(
