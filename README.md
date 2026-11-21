@@ -35,7 +35,7 @@ to work on it alone.
 
 | Path | |
 |---|---|
-| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 18, as Swift types, and its numbers. |
+| `Sources/TernKit/Companion/Frame.swift` | Every frame of the protocol's version 20, as Swift types, and its numbers. |
 | `Sources/TernKit/Companion/Codec.swift` | A frame built into bytes, and read back from them. |
 | `Sources/TernKit/Companion/ByteStream.swift` | Frames on a byte stream (USB serial, TCP), with the node's console text between them. Bluetooth does not need it. |
 | `Sources/TernKit/Sharing/` | An address's text, link and short code (draft/sharing.md); a group's join code read, to name the group before the user joins it (draft/groups.md); and the QR encoder the join code is drawn with, alphanumeric either side of its `#`, which Core Image's generator cannot do. |
@@ -126,7 +126,7 @@ that its address, contacts, groups and messages go for good and that it must be 
 the node answers, the app forgets it and everything it kept of it, and asks the user to remove the
 node in the system's Bluetooth settings too, which an app cannot do.
 
-It speaks version 18 of the companion protocol, and any earlier version a node speaks. A chat can be
+It speaks version 20 of the companion protocol, and any earlier version a node speaks. A chat can be
 deleted from a node of version 16 or later (`FORGET`, `FORGET_GROUP`), from its menu, or by swiping
 it or from its context menu in the list. The app asks first, saying that its messages go from the
 node and from every phone or computer connected to it, for good, and that any not yet delivered
@@ -221,6 +221,16 @@ short code, and never in place of a contact's name. A contact's card opens its c
 anyone else's opens Add Contact with the address and the card's name in it, to keep or change.
 The node's own card is turned on and named only under Node, Privacy & Location, which says what that puts on
 the air; the app never does either by itself.
+
+From a node of version 19, first contact carries names
+([draft/first-contact.md](https://github.com/ternmesh/spec/blob/main/draft/first-contact.md#names)): the
+node gives the name on its card, whether the card is on or off, and says the name each other node
+gave. "Tried to reach you" shows an asker's (`ASKED`'s `name`) under its short code, as its claim, and
+Save as Contact offers it; a contact the user never named shows the name it gave (`CONTACT`'s
+`says`) as its claim, and Rename offers it. Neither is ever put in place of a name the user gave.
+From a node of version 20, Look About, at the top of People's Nearby, asks the nodes in range for
+their cards (`LOOK`), which come within half a minute as any card does; only ever when the user
+taps it, and a node that asked less than 10 minutes before says it is too soon (`ERROR` 16).
 
 Addresses are shared per [draft/sharing.md](https://github.com/ternmesh/spec/blob/main/draft/sharing.md),
 which is still a strawman: the Node screen shows the node's as a QR code, a link and the short code

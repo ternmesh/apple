@@ -31,7 +31,7 @@ extension Frame {
             w.u8(version)
         case let .sync(after):
             w.u32(after)
-        case .ping, .off, .ok, .updateEnd, .updateBootloader, .wipe, .restart:
+        case .ping, .off, .look, .ok, .updateEnd, .updateBootloader, .wipe, .restart:
             break
         case let .synced(news):
             if let news { w.u8(news) }
@@ -180,9 +180,10 @@ extension Frame {
             w.addr(c.address)
             w.u8(c.session)
             try w.str(c.name, limit: Companion.nameMax, field: "name")
-            // Version 15's `wake`, then version 17's `owner` after it.
-            if c.wake != nil || c.owner != nil { w.u16(c.wake ?? 0) }
-            if let owner = c.owner { w.u8(owner) }
+            // Version 15's `wake`, then version 17's `owner` and version 19's `says` after it.
+            if c.wake != nil || c.owner != nil || c.says != nil { w.u16(c.wake ?? 0) }
+            if c.owner != nil || c.says != nil { w.u8(c.owner ?? 0) }
+            if let says = c.says { try w.str(says, limit: Companion.nameMax, field: "says") }
         case let .message(m):
             w.u32(m.id)
             w.addr(m.contact)
@@ -213,9 +214,11 @@ extension Frame {
             w.u16(p.millivolts)
             w.u8(p.percent)
             w.u8(p.flags)
-        case let .asked(address, why):
+        case let .asked(address, why, name):
             w.addr(address)
             w.u8(why)
+            // Version 19's `name`.
+            if let name { try w.str(name, limit: Companion.nameMax, field: "name") }
         case let .group(g):
             w.gid(g.group)
             try w.str(g.name, limit: Companion.nameMax, field: "name")
@@ -311,6 +314,7 @@ extension Frame {
             body = .manage(ref: try r.u32(), to: try r.addr(), request: try r.blob(limit: Companion.requestMax))
         case 0x14: body = .owner(address: try r.addr(), owner: try r.u8())
         case 0x15: body = .trace(ref: try r.u32(), to: try r.u32())
+        case 0x16: body = .look
         case 0x18: body = .saveContact(address: try r.addr(), name: try r.str(limit: Companion.nameMax))
         case 0x19: body = .removeContact(address: try r.addr())
         case 0x1A: body = .endSession(address: try r.addr())
@@ -382,6 +386,8 @@ extension Frame {
             if version >= 15 { c.wake = try r.u16() }
             // And one of version 16 or earlier, one without `owner`.
             if version >= 17 { c.owner = try r.u8() }
+            // And one of version 18 or earlier, one without `says`.
+            if version >= 19 { c.says = try r.str(limit: Companion.nameMax) }
             body = .contact(c)
         case 0x82: body = .contactGone(address: try r.addr())
         case 0x83:
@@ -396,7 +402,9 @@ extension Frame {
         case 0x87:
             body = .airtime(Airtime(period: try r.u32(), allowed: try r.u32(), used: try r.u32(), wait: try r.u32()))
         case 0x88: body = .power(Power(millivolts: try r.u16(), percent: try r.u8(), flags: try r.u8()))
-        case 0x89: body = .asked(address: try r.addr(), why: try r.u8())
+        case 0x89:
+            // A client of version 18 or earlier is sent an `ASKED` without `name`.
+            body = .asked(address: try r.addr(), why: try r.u8(), name: version >= 19 ? try r.str(limit: Companion.nameMax) : nil)
         case 0x8A: body = .group(Group(group: try r.gid(), name: try r.str(limit: Companion.nameMax)))
         case 0x8B: body = .groupGone(group: try r.gid())
         case 0x8C:

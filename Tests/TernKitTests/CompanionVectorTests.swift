@@ -402,7 +402,7 @@ final class CompanionVectorTests: XCTestCase {
         var sixteen = owner
         sixteen.owner = nil
         XCTAssertEqual(try Frame.decode(seventeen, version: 16).body, .contact(sixteen))
-        XCTAssertEqual(try Frame.decode(seventeen).body, .contact(owner))
+        XCTAssertEqual(try Frame.decode(seventeen, version: 17).body, .contact(owner))
         XCTAssertTrue(owner.isOwner)
         // An owner flag on a contact with no `wake` is written after a `wake` of 0.
         XCTAssertEqual(
@@ -457,6 +457,50 @@ final class CompanionVectorTests: XCTestCase {
         XCTAssertThrowsError(try Frame(seq: 0, body: .traced(tooLong)).encode())
         // An entry cut short is no hop.
         XCTAssertEqual(Traced(id: 26, to: 1, result: 0, out: 1, took: 0, snr: 0, entries: Array(repeating: 0, count: 9)).hops.count, 1)
+    }
+
+    /// Names in first contact are version 19's: `ASKED`'s `name` and `CONTACT`'s `says`, each a
+    /// claim, empty for none, and sent to no client of version 18 or earlier.
+    func testNamesInFirstContactAreVersion19s() throws {
+        let bob = Address(Array(repeating: 0xB0, count: 32))!
+        let asked = Body.asked(address: bob, why: 1, name: "Robert")
+        let nineteen = try Frame(seq: 2, body: asked).encode()
+        XCTAssertEqual(try Frame.decode(nineteen).body, asked)
+        XCTAssertEqual(try Frame.decode(nineteen, version: 18).body, .asked(address: bob, why: 1), "the name passed over")
+        let eighteen = try Frame(seq: 2, body: .asked(address: bob, why: 1)).encode()
+        XCTAssertEqual(eighteen.count, nineteen.count - 7, "no name at all, not an empty one")
+        XCTAssertThrowsError(try Frame.decode(eighteen), "version 19's ASKED has its name, if empty")
+        XCTAssertThrowsError(try Frame(seq: 0, body: .asked(address: bob, why: 1, name: String(repeating: "x", count: 32))).encode())
+
+        let says = Contact(address: bob, session: 1, name: "", wake: 0, owner: 0, says: "Robert at the ridge")
+        let contact = try Frame(seq: 3, body: .contact(says)).encode()
+        XCTAssertEqual(try Frame.decode(contact).body, .contact(says))
+        var before = says
+        before.says = nil
+        XCTAssertEqual(try Frame.decode(contact, version: 18).body, .contact(before))
+        // A claim on a contact with no `wake` or `owner` is written after a `wake` and an `owner` of 0.
+        XCTAssertEqual(
+            try Frame.decode(try Frame(seq: 0, body: .contact(Contact(address: bob, session: 0, name: "", says: "R"))).encode()).body,
+            .contact(Contact(address: bob, session: 0, name: "", wake: 0, owner: 0, says: "R")))
+        XCTAssertThrowsError(try Frame(seq: 0, body: .contact(Contact(address: bob, session: 0, name: "", says: String(repeating: "x", count: 32)))).encode())
+        // The records file reads a CONTACT a client of version 18 wrote, without `says`.
+        XCTAssertEqual(Records.kept(try Frame(seq: 0, body: .contact(before)).encode())?.body, .contact(before))
+    }
+
+    /// Asking for cards is version 20's: `LOOK`, a request with no fields, and error 16, too soon.
+    func testLookingIsVersion20s() throws {
+        XCTAssertEqual(Companion.since(type: 0x16), 20)
+        XCTAssertEqual(Body.look.since, 20)
+        XCTAssertTrue(Body.look.type.isRequestType)
+        XCTAssertEqual(Body.look.name, "LOOK")
+        XCTAssertEqual(try Frame(seq: 5, body: .look).encode(), [0x16, 5])
+        XCTAssertEqual(try Frame.decode([0x16, 5]).body, .look)
+        XCTAssertThrowsError(try Frame.decode([0x16, 5], version: 19)) { XCTAssertEqual($0 as? DecodeError, .undefined) }
+        XCTAssertEqual(Frame.errorCode(for: [0x16, 5], .undefined), ErrorCode.undefined)
+        XCTAssertEqual(ErrorCode.tooSoon, 16)
+        XCTAssertEqual(Companion.askGap, 600)
+        XCTAssertTrue(Words.error(ErrorCode.tooSoon).contains("10 min"))
+        XCTAssertFalse(Managing.allowed(.look), "a node asks for cards only at its own user's asking")
     }
 
     /// Turning the node off is version 9's: a request with no fields, which a client sends
@@ -538,6 +582,7 @@ final class CompanionVectorTests: XCTestCase {
         case "MANAGE": return .manage(ref: u32("ref"), to: addr("to"), request: f["request"]!.bytes)
         case "OWNER": return .owner(address: addr("address"), owner: u8("owner"))
         case "TRACE": return .trace(ref: u32("ref"), to: u32("to"))
+        case "LOOK": return .look
         case "RESTART": return .restart
         case "SAVE_CONTACT": return .saveContact(address: addr("address"), name: str("name"))
         case "REMOVE_CONTACT": return .removeContact(address: addr("address"))
@@ -581,7 +626,7 @@ final class CompanionVectorTests: XCTestCase {
         case "CONTACT":
             return .contact(Contact(
                 address: addr("address"), session: u8("session"), name: str("name"),
-                wake: f["wake"].map { UInt16($0.int) }, owner: f["owner"].map { UInt8($0.int) }))
+                wake: f["wake"].map { UInt16($0.int) }, owner: f["owner"].map { UInt8($0.int) }, says: f["says"]?.string))
         case "CONTACT_GONE": return .contactGone(address: addr("address"))
         case "MESSAGE":
             return .message(Message(
@@ -595,7 +640,7 @@ final class CompanionVectorTests: XCTestCase {
         case "AIRTIME":
             return .airtime(Airtime(period: u32("period"), allowed: u32("allowed"), used: u32("used"), wait: u32("wait")))
         case "POWER": return .power(Power(millivolts: u16("millivolts"), percent: u8("percent"), flags: u8("flags")))
-        case "ASKED": return .asked(address: addr("address"), why: u8("why"))
+        case "ASKED": return .asked(address: addr("address"), why: u8("why"), name: f["name"]?.string)
         case "GROUP": return .group(Group(group: gid("group"), name: str("name")))
         case "GROUP_GONE": return .groupGone(group: gid("group"))
         case "GROUP_MESSAGE":
