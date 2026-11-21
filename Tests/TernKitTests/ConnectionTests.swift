@@ -587,17 +587,63 @@ final class ConnectionTests: XCTestCase {
         XCTAssertEqual(try node.sent.map { try Frame.decode($0).body.name }, ["SYNC"], "the sync missed news")
     }
 
-    /// The client says version 18 in `HELLO`, and speaks the lesser of it and the node's.
-    func testHelloSaysEighteen() throws {
-        XCTAssertEqual(Companion.version, 18)
-        for nodeVersion: UInt8 in [11, 12, 13, 14, 15, 16, 17, 18, 19] {
+    /// The client says version 20 in `HELLO`, and speaks the lesser of it and the node's.
+    func testHelloSaysTwenty() throws {
+        XCTAssertEqual(Companion.version, 20)
+        for nodeVersion: UInt8 in [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21] {
             let node = Node()
             node.version = nodeVersion
             node.connection.open()
-            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 18))
+            XCTAssertEqual(try Frame.decode(node.sent[0]).body, .hello(version: 20))
             node.answerAll()
-            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 18))
+            XCTAssertEqual(node.connection.agreed, min(nodeVersion, 20))
         }
+    }
+
+    /// `LOOK` goes only to a node of version 20 or later, and a node that asked for cards too lately
+    /// refuses it with 16. A node of version 18 sends no names in first contact: its `ASKED` and
+    /// `CONTACT` read with none, not with empty ones.
+    func testLookAndNamesByTheNodesVersion() throws {
+        for nodeVersion: UInt8 in [18, 19] {
+            let node = Node()
+            node.version = nodeVersion
+            node.connection.open()
+            node.answerAll()
+            var result: Result<Body, RequestFailure>?
+            node.connection.submit(.look) { result = $0 }
+            XCTAssertEqual(result, .failure(.unsupported), "\(nodeVersion)")
+            XCTAssertEqual(node.sent, [], "nothing on the link")
+        }
+
+        let node = Node()
+        node.connection.open()
+        node.answerAll()
+        var results: [Result<Body, RequestFailure>] = []
+        node.connection.submit(.look) { results.append($0) }
+        XCTAssertEqual(node.answerOne(), .look)
+        node.connection.submit(.look) { results.append($0) }
+        let again = try Frame.decode(node.sent.removeFirst())
+        XCTAssertEqual(again.body, .look)
+        node.connection.receive(try Frame(seq: again.seq, body: .error(code: ErrorCode.tooSoon)).encode())
+        XCTAssertEqual(results, [.success(.ok), .failure(.refused(code: ErrorCode.tooSoon))])
+
+        let older = Node()
+        older.version = 18
+        older.connection.open()
+        older.answerAll()
+        older.news(.asked(address: Node.carol, why: 1))
+        older.news(.contact(Contact(address: Node.bob, session: 1, name: "")))
+        XCTAssertTrue(older.events.contains(.news(.asked(address: Node.carol, why: 1, name: nil))))
+        XCTAssertNil(older.connection.records.contacts[Node.bob]?.says)
+
+        let named = Node()
+        named.connection.open()
+        named.answerAll()
+        named.news(.asked(address: Node.carol, why: 1, name: "Carol"))
+        named.news(.contact(Contact(address: Node.bob, session: 1, name: "", says: "Robert")))
+        XCTAssertTrue(named.events.contains(.news(.asked(address: Node.carol, why: 1, name: "Carol"))))
+        XCTAssertEqual(named.connection.records.contacts[Node.bob]?.says, "Robert")
+        XCTAssertEqual(named.connection.records.contacts[Node.bob]?.name, "", "the claim is not the user's name")
     }
 
     /// `UPDATE_BEGIN`'s signature goes only to a node of version 13 or later; to one of 13 a
@@ -1448,6 +1494,15 @@ private final class Node {
         if case var .contact(c) = body, c.owner == nil, min(version, connection.version) >= 17 {
             c.owner = 0
             body = .contact(c)
+        }
+        // And, from version 19, with `says`, and an `ASKED` with `name`: empty where the contact or
+        // the asker gave itself none.
+        if case var .contact(c) = body, c.says == nil, min(version, connection.version) >= 19 {
+            c.says = ""
+            body = .contact(c)
+        }
+        if case let .asked(address, why, nil) = body, min(version, connection.version) >= 19 {
+            body = .asked(address: address, why: why, name: "")
         }
         connection.receive(try! Frame(seq: newsCount, body: body).encode())
         newsCount &+= 1

@@ -102,6 +102,7 @@ final class ManagingVectorTests: XCTestCase {
             case "MANAGE": .manage(ref: 1, to: bob, request: [3, 1])
             case "OWNER": .owner(address: bob, owner: 1)
             case "TRACE": .trace(ref: 1, to: 1)
+            case "LOOK": .look
             case "SAVE_CONTACT": .saveContact(address: bob, name: "Bob")
             case "REMOVE_CONTACT": .removeContact(address: bob)
             case "END_SESSION": .endSession(address: bob)

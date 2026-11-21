@@ -143,6 +143,10 @@ struct PeopleView: View {
                     if let c = renaming { model.saveContact(c.address, name: name) }
                 }
                 Button("Cancel", role: .cancel) {}
+            } message: {
+                if let says = renaming?.says, !says.isEmpty {
+                    Text("They say they are “\(says)”. Save them under any name you like.")
+                }
             }
             .showsProblems()
         }
@@ -164,8 +168,10 @@ struct PeopleView: View {
         }
     }
 
+    /// Renames the contact. One the user never named offers the name it gave itself, to keep or
+    /// change: it is never saved unless the user saves it.
     private func rename(_ c: Contact) {
-        name = c.name
+        name = c.name.isEmpty ? c.says ?? "" : c.name
         renaming = c
     }
 }
@@ -180,6 +186,10 @@ struct ContactRow: View {
             Avatar(name: name, key: contact.address.description)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).fontWeight(.semibold)
+                // Unnamed, the name the contact gave itself shows, as its claim and never as the name.
+                if contact.name.isEmpty, let claim = Words.claim(contact.says ?? "") {
+                    Text(claim).font(.callout)
+                }
                 HStack(spacing: 6) {
                     Text(contact.session == 1 ? "Secure" : "Not talked yet")
                         .font(.subheadline)
@@ -209,9 +219,9 @@ struct AskedSection: View {
                 ForEach(model.asked) { a in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(a.address.short).font(.body.monospaced())
-                        // The address in an ASKED is proved, and a card from it is signed by it: what
-                        // the card says is still only what its sender says.
-                        if let card = model.records.cards[a.address], let claim = Words.claim(card.name) {
+                        // The address in an ASKED is proved, and a card from it is signed by it: the
+                        // name the asker gave itself, or else its card's, is still only what it says.
+                        if let claim = Words.claim(claimed(a)) {
                             Text(claim).font(.callout)
                         }
                         Text("\(Words.asked(a.why)), \(a.when.formatted(date: .omitted, time: .shortened))")
@@ -234,6 +244,11 @@ struct AskedSection: View {
             }
         }
     }
+
+    /// The name the address claims: the one it gave itself in asking, or else its card's.
+    private func claimed(_ a: Asked) -> String {
+        a.name.isEmpty ? model.records.cards[a.address]?.name ?? "" : a.name
+    }
 }
 
 /// The alert that saves an address that asked as a contact, under the name typed.
@@ -255,8 +270,14 @@ struct SaveAskedAlert: ViewModifier {
             Button("Cancel", role: .cancel) { name = "" }
         }
         .onChange(of: saving) { a in
-            // A card from the address offers the name it carries, to keep or change.
-            if let a, let card = model.records.cards[a.address] { name = card.name }
+            // The name the address gave itself in asking, or else the one its card carries, is
+            // offered, to keep or change.
+            guard let a else { return }
+            if !a.name.isEmpty {
+                name = a.name
+            } else if let card = model.records.cards[a.address] {
+                name = card.name
+            }
         }
     }
 }

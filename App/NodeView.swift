@@ -598,6 +598,10 @@ struct NodeView: View {
             } footer: {
                 Text("On, your node sends its address and the name above to every node in range, about every "
                     + "two hours, so anyone nearby can recognise it each time. Off, it puts neither on the air. "
+                    + (model.speaksNames
+                        ? "Either way, it gives the name to each node it makes first contact with, sealed so that "
+                            + "only that node can read it. "
+                        : "")
                     + "The cards of others show under People, Nearby, either way.")
             }
             .disabled(!model.isConnected)

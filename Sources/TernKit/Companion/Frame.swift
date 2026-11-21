@@ -1,11 +1,13 @@
-// The companion protocol's frames, version 18: draft/companion.md in ternmesh/spec.
+// The companion protocol's frames, version 20: draft/companion.md in ternmesh/spec.
 //
 // Nothing here touches Bluetooth or a screen. It builds frames and reads them, and
 // Tests/TernKitTests holds it to the specification's vectors.
 
 /// The protocol's numbers, as the specification's Parameters give them.
 public enum Companion {
-    /// The version this client speaks. Version 17 is this without how messages went and traces (the
+    /// The version this client speaks. Version 19 is this without asking for cards (the request
+    /// `LOOK` and error 16). Version 18 is version 19 without names in first contact (`ASKED`'s
+    /// `name` and `CONTACT`'s `says`). Version 17 is version 18 without how messages went and traces (the
     /// request `TRACE` and the news `ROUTE` and `TRACED`). Version 16 is version 17 without managing (the requests
     /// `MANAGE`, `OWNER` and `RESTART`, the setting 10, errors 13 and 14, the news `MANAGED` and
     /// `OWNER_CHANGED`, `CONTACT`'s `owner` and `SELF`'s `locked`). Version 15 is version 16 without
@@ -27,7 +29,7 @@ public enum Companion {
     /// without updates (the requests `0x30` to `0x32`, `UPDATING`, errors 10 and 11, and `INFO`'s
     /// `board` and `release`), version 2 is version 3 without `SYNCED`'s `news`, version 1 is
     /// version 2 without groups, and version 0 is version 1 without `END_SESSION` and `ASKED`.
-    public static let version: UInt8 = 18
+    public static let version: UInt8 = 20
 
     /// The least version that defines the frame type `type`.
     public static func since(type: UInt8) -> UInt8 {
@@ -46,6 +48,7 @@ public enum Companion {
         case 0x12, 0x28, 0x96...0x97: 16
         case 0x13, 0x14, 0x38, 0x98...0x99: 17
         case 0x15, 0x9A...0x9B: 18
+        case 0x16: 20
         default: 0
         }
     }
@@ -103,6 +106,9 @@ public enum Companion {
     /// One entry of a trace: a routing id, 4 bytes, and the SNR its node heard the frame at, an
     /// `i8` in quarters of a dB.
     public static let traceEntry = 5
+    /// The least time between two asks for cards a node sends, in seconds (draft/cards.md's
+    /// `ASK_GAP`): a `LOOK` sooner is answered `ERROR` 16 (version 20).
+    public static let askGap = 600.0
     /// The least time between two `ASKED`s for one address, or two of `NEIGHBOUR`, `AIRTIME` or
     /// `POWER`, or two `FIX`es for a fix that moved, in seconds.
     public static let quiet = 10.0
@@ -208,6 +214,9 @@ public enum ErrorCode {
     /// Not an owner: a managed node's answer to a request from anyone but its owners. It may not
     /// say so, and say nothing instead, as a node did before it had this answer.
     public static let notAnOwner: UInt8 = 15
+    /// Too soon: `LOOK` less than `Companion.askGap` after the node last asked for cards (version
+    /// 20).
+    public static let tooSoon: UInt8 = 16
 }
 
 /// A frame: its sequence number and what it says. The type byte follows from the body.
@@ -340,13 +349,21 @@ public struct Contact: Equatable, Sendable {
     /// 1 if the contact is one of the node's owners, who may manage it over the mesh, 0 if not.
     /// From a `CONTACT` of version 17 or later: nil before.
     public var owner: UInt8?
+    /// The name the contact gave itself in the last first contact the node made with it, empty if
+    /// none (draft/first-contact.md's Names). Its claim, not the user's name for it: shown as such
+    /// where `name` is empty, and offered when the user names it, never put in `name`'s place.
+    /// From a `CONTACT` of version 19 or later: nil before.
+    public var says: String?
 
-    public init(address: Address, session: UInt8, name: String, wake: UInt16? = nil, owner: UInt8? = nil) {
+    public init(
+        address: Address, session: UInt8, name: String, wake: UInt16? = nil, owner: UInt8? = nil, says: String? = nil
+    ) {
         self.address = address
         self.session = session
         self.name = name
         self.wake = wake
         self.owner = owner
+        self.says = says
     }
 
     /// Whether it is one of the node's owners.
@@ -809,7 +826,7 @@ public struct NodeFix: Equatable, Sendable {
     public var has: Bool { source != NodeFix.noSource }
 }
 
-/// What a frame says: every frame of version 18.
+/// What a frame says: every frame of version 20.
 public enum Body: Equatable, Sendable {
     // Requests, sent by the client.
     case hello(version: UInt8)
@@ -839,6 +856,10 @@ public enum Body: Equatable, Sendable {
     /// `send`. Answered `QUEUED`; `STATE` news with that `id` says what became of it on the air, and
     /// `TRACED` how it ended (version 18).
     case trace(ref: UInt32, to: UInt32)
+    /// Ask the nodes in earshot for their cards, which those whose cards are on send within half a
+    /// minute, as `CARD` news. Answered `OK`, or `ERROR` 16 less than `Companion.askGap` after the
+    /// node last asked. Only ever at the user's asking (version 20).
+    case look
     case saveContact(address: Address, name: String)
     case removeContact(address: Address)
     case endSession(address: Address)
@@ -913,8 +934,10 @@ public enum Body: Equatable, Sendable {
     case airtime(Airtime)
     case power(Power)
     /// The node refused first contact from `address`, which proved itself: `why` is 1 if it is
-    /// not a contact, 2 if the node has no room for another session.
-    case asked(address: Address, why: UInt8)
+    /// not a contact, 2 if the node has no room for another session. `name` is the name the asker
+    /// gave itself, empty if none: its claim, shown with the address's short code and offered as
+    /// the contact's name. From an `ASKED` of version 19 or later: nil before.
+    case asked(address: Address, why: UInt8, name: String? = nil)
     case group(Group)
     case groupGone(group: GroupID)
     case groupMessage(GroupMessage)
@@ -964,6 +987,7 @@ public enum Body: Equatable, Sendable {
         case .manage: 0x13
         case .owner: 0x14
         case .trace: 0x15
+        case .look: 0x16
         case .saveContact: 0x18
         case .removeContact: 0x19
         case .endSession: 0x1A
@@ -1039,6 +1063,7 @@ public enum Body: Equatable, Sendable {
         case .manage: "MANAGE"
         case .owner: "OWNER"
         case .trace: "TRACE"
+        case .look: "LOOK"
         case .saveContact: "SAVE_CONTACT"
         case .removeContact: "REMOVE_CONTACT"
         case .endSession: "END_SESSION"

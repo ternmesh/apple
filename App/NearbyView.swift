@@ -4,7 +4,8 @@
 // theirs, else the id. A contact opens its conversation; a card from anyone else offers to add
 // them as a contact, under a name the user chooses. Nothing is saved or sent but as the user asks.
 // A neighbour that is no contact's and sent no card is only a routing id: it can be neither
-// messaged nor added, which the list says under them, and tapping one says why.
+// messaged nor added, which the list says under them, and tapping one says why. Look About, at the
+// user's asking only, has the node ask those in earshot for their cards (version 20).
 
 import SwiftUI
 import TernKit
@@ -22,6 +23,23 @@ struct NearbySections: View {
         let neighbours = model.records.neighbours
         let bare = neighbours.values.filter { !carded.contains($0.routingId) }.sorted { $0.heard < $1.heard }
 
+        if model.speaksCards && model.speaksLooking {
+            SwiftUI.Section {
+                Button {
+                    model.look()
+                } label: {
+                    Label("Look About", systemImage: "dot.radiowaves.left.and.right")
+                }
+                .disabled(!model.isConnected)
+            } footer: {
+                if let at = model.lookedAt {
+                    Text("Your node asked at \(at.formatted(date: .omitted, time: .shortened)). Cards from those "
+                        + "in range with theirs on come within half a minute.")
+                } else {
+                    Text("Asks the nodes in range for their cards. Those with theirs on answer within half a minute.")
+                }
+            }
+        }
         if cards.isEmpty && bare.isEmpty {
             SwiftUI.Section {
                 Text(model.agreed == nil

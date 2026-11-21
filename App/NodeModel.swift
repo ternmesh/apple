@@ -100,6 +100,9 @@ struct Asked: Identifiable, Equatable {
     var address: Address
     var why: UInt8
     var when: Date
+    /// The name the asker gave itself, empty if none or if the node is of version 18 or earlier:
+    /// its claim, shown with the short code and offered as the contact's name.
+    var name = ""
 }
 
 @MainActor
@@ -340,8 +343,9 @@ final class NodeModel: ObservableObject {
             for m in managedNodes.values { m.cancel() }
             managedNodes = [:]
             busyManaged = []
-            // As are its traces and the range test's pings.
+            // As are its traces and the range test's pings, and when it looked about.
             traces = [:]
+            lookedAt = nil
             closeRangeTest()
             chatPath = []
             seen = [:]
@@ -416,6 +420,7 @@ final class NodeModel: ObservableObject {
         managedNodes = [:]
         busyManaged = []
         traces = [:]
+        lookedAt = nil
         closeRangeTest()
         chatPath = []
         seen = [:]
@@ -985,6 +990,28 @@ final class NodeModel: ObservableObject {
 
     /// Whether the node speaks cards: version 6 or later. Before it, nothing of them is offered.
     var speaksCards: Bool { (agreed ?? 0) >= 6 }
+
+    /// Whether the node gives the name its cards carry in first contact, and says the name each
+    /// other node gave (`ASKED`'s `name`, `CONTACT`'s `says`): version 19 or later.
+    var speaksNames: Bool { (agreed ?? 0) >= 19 }
+
+    /// Whether the node can be asked to look about, asking those in earshot for their cards:
+    /// version 20 or later. Before it, Look About is not offered.
+    var speaksLooking: Bool { (agreed ?? 0) >= 20 }
+
+    /// When the node last said it would ask those in earshot for their cards, this run: their
+    /// cards come within half a minute, as any card does.
+    @Published private(set) var lookedAt: Date?
+
+    /// Asks the node to ask those in earshot for their cards. Only ever at the user's asking: each
+    /// ask is airtime for every node that hears it, and the node refuses another within
+    /// `Companion.askGap`, which `request` shows.
+    func look() {
+        guard speaksLooking else { return }
+        request(.look) { [weak self] answer in
+            if answer == .ok { self?.lookedAt = Date() }
+        }
+    }
 
     /// Whether the node can be asked for the most it may transmit at: version 10 or later. A node
     /// before it would take -128 as a power, and refuse it.
@@ -1597,11 +1624,11 @@ final class NodeModel: ObservableObject {
             updateMethod = link.connection?.updateMethod
             nodeReturned()
         case let .news(body):
-            if case let .asked(address, why) = body {
+            if case let .asked(address, why, name) = body {
                 // A saved contact turned away for want of room is news too: only the offer to save
                 // it is left out.
                 asked.removeAll { $0.address == address }
-                asked.insert(Asked(address: address, why: why, when: Date()), at: 0)
+                asked.insert(Asked(address: address, why: why, when: Date(), name: name ?? ""), at: 0)
             } else if records.isArrival(body) {
                 notify(body)
             }
@@ -1836,7 +1863,7 @@ final class NodeModel: ObservableObject {
     private func keepAsked() {
         guard let id = remembered else { return }
         let kept = asked.map { a -> [String: String] in
-            ["address": a.address.description, "why": String(a.why), "when": String(a.when.timeIntervalSince1970)]
+            ["address": a.address.description, "why": String(a.why), "when": String(a.when.timeIntervalSince1970), "name": a.name]
         }
         UserDefaults.standard.set(kept, forKey: Self.askedKey(id))
     }
@@ -1860,7 +1887,7 @@ final class NodeModel: ObservableObject {
             guard let address = d["address"].flatMap(Address.init(hex:)), let why = d["why"].flatMap(UInt8.init),
                   let when = d["when"].flatMap(Double.init)
             else { return nil }
-            return Asked(address: address, why: why, when: Date(timeIntervalSince1970: when))
+            return Asked(address: address, why: why, when: Date(timeIntervalSince1970: when), name: d["name"] ?? "")
         }
     }
 

@@ -62,6 +62,7 @@ public enum Words {
         case ErrorCode.notOverMesh: "The node does not do that over the mesh: only over USB or Bluetooth."
         case ErrorCode.locked: "The node's Bluetooth is locked. Only USB, or one of its owners over the mesh, can unlock it."
         case ErrorCode.notAnOwner: "Your node is not one of that node's owners."
+        case ErrorCode.tooSoon: "Your node asked who's about less than \(duration(UInt32(Companion.askGap))) ago. Try again later."
         default: "The node refused (\(code))."
         }
     }

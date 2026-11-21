@@ -19,7 +19,8 @@
 // CONTACT from before version 15 ends before `wake`: it is read as version 14's, and says nothing
 // of whether the contact sleeps. A CONTACT of version 15 or 16 ends before `owner`, and a SELF of
 // version 11 to 16 before `locked`: each is read as version 16's, and says nothing of owners or
-// the lock.
+// the lock. A CONTACT of version 17 or 18 ends before `says`: it is read as version 18's, and says
+// nothing of the name the contact gave itself.
 //
 // Positions, sharing, cards, the node's own fix and its sleeping are not kept. A position's or a fix's age,
 // sharing's minutes left and how long ago a card was heard are as of when the record was sent, so
@@ -103,13 +104,17 @@ extension Records {
 
 extension Records {
     /// One of the file's frames. `SELF` and `CONTACT` are the records later versions made longer,
-    /// so a `CONTACT` that does not read as this version's is read as the version before `owner`,
+    /// so a `CONTACT` that does not read as this version's is read as the version before `says`,
+    /// then as the version before `owner`,
     /// then as the version before `wake`, and a `SELF` as the version before `locked`, then before
     /// `pairing`, then before `most`, and then before cards: each reads a longer one too, and would
     /// drop what it does not know.
     static func kept(_ frame: [UInt8]) -> Frame? {
         if let read = try? Frame.decode(frame) { return read }
-        if frame.first == 0x81 { return (try? Frame.decode(frame, version: 16)) ?? (try? Frame.decode(frame, version: 14)) }
+        if frame.first == 0x81 {
+            return (try? Frame.decode(frame, version: 18)) ?? (try? Frame.decode(frame, version: 16))
+                ?? (try? Frame.decode(frame, version: 14))
+        }
         guard frame.first == 0x80 else { return nil }
         return (try? Frame.decode(frame, version: 16)) ?? (try? Frame.decode(frame, version: 10))
             ?? (try? Frame.decode(frame, version: 9)) ?? (try? Frame.decode(frame, version: 5))
