@@ -924,6 +924,13 @@ final class NodeModel: ObservableObject {
     }
     func set(_ setting: Setting) { request(.set(setting)) }
 
+    /// Sends `settings` in order, each only once the one before is answered: the card's name, then
+    /// cards on, so that the card never goes out with the old name.
+    func set(_ settings: [Setting]) {
+        guard let first = settings.first else { return }
+        request(.set(first)) { [weak self] _ in self?.set(Array(settings.dropFirst())) }
+    }
+
     /// Sets the name the node's cards carry, the one name it puts on the air in clear. Only ever
     /// because the user typed it: the specification says a client never changes it by itself.
     func setCardName(_ name: String) {

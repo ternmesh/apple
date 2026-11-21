@@ -549,42 +549,56 @@ struct NodeView: View {
         }
     }
 
-    /// The node's presence card: off until the user turns it on, and the name it carries, which the
-    /// node keeps while it is off. Neither is ever set but by the user, here.
+    /// The node's presence card: one switch, off until the user turns it on, with the name it
+    /// carries under it, which the node keeps while it is off. Turning it on, by the switch or by
+    /// saving a name while it is off, sends the name typed too: a name saved to a card left off was
+    /// what confused people. Neither is ever set but by the user, here.
     @ViewBuilder
     private func card(_ me: NodeSelf) -> some View {
         if model.speaksCards, let cards = me.cards {
             let name = cardName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let on = cards == 1
             SwiftUI.Section {
                 Toggle(
-                    "Send a presence card",
+                    "Show my card to nodes nearby",
                     isOn: Binding(
-                        get: { cards == 1 },
-                        set: { on in if on { confirmingCards = true } else { model.set(.cards(0)) } }))
+                        get: { on },
+                        set: { turnOn in if turnOn { confirmingCards = true } else { model.set(.cards(0)) } }))
+                    .disabled(!Card.fits(name) && !on)
                     .confirmationDialog(
-                        "Turn on the presence card?", isPresented: $confirmingCards, titleVisibility: .visible
+                        "Show your card to nodes nearby?", isPresented: $confirmingCards, titleVisibility: .visible
                     ) {
-                        Button("Turn On") { model.set(.cards(1)) }
+                        Button("Turn On") {
+                            model.set(Card.requests(on: on, saved: me.cardName ?? "", typed: cardName, turnOn: true))
+                        }
                         Button("Cancel", role: .cancel) {}
                     } message: {
-                        Text("Every couple of hours the node sends its address, in clear, and its card name to "
-                            + "anyone near. They can tell it is the same node each time, and can use the address "
-                            + "to reach you.")
+                        Text("About every two hours your node sends its address, in clear, and the name on its card "
+                            + "to every node in range. Anyone nearby can tell it is the same node each time, and can "
+                            + "use the address to reach you.")
                     }
-                TextField("Card name", text: $cardName)
+                TextField("Name on the card", text: $cardName)
                 if !Card.fits(name) {
                     Text("A card name is at most \(Companion.cardNameMax) bytes.").foregroundStyle(.red)
                 }
                 if name != (me.cardName ?? "") {
-                    Button(name.isEmpty ? "Clear Card Name" : "Set Card Name") { model.setCardName(name) }
+                    if on {
+                        Button(name.isEmpty ? "Clear Card Name" : "Save Card Name") {
+                            model.set(Card.requests(on: on, saved: me.cardName ?? "", typed: cardName, turnOn: false))
+                        }
                         .disabled(!Card.fits(name))
+                    } else {
+                        // Off, the name is saved with the card turned on, asked first as the switch asks.
+                        Button("Save and Turn On") { confirmingCards = true }
+                            .disabled(!Card.fits(name))
+                    }
                 }
             } header: {
                 Text("Presence card")
             } footer: {
-                Text("Anyone near can see this node's address and the name above, every couple of hours, "
-                    + "while the card is on. It is off until you turn it on. The cards of others show "
-                    + "under People, Nearby, either way.")
+                Text("On, your node sends its address and the name above to every node in range, about every "
+                    + "two hours, so anyone nearby can recognise it each time. Off, it puts neither on the air. "
+                    + "The cards of others show under People, Nearby, either way.")
             }
             .disabled(!model.isConnected)
         }
