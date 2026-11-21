@@ -3,6 +3,8 @@
 // name its sender claimed, in quotes; a neighbour is a contact's name when its routing id is one of
 // theirs, else the id. A contact opens its conversation; a card from anyone else offers to add
 // them as a contact, under a name the user chooses. Nothing is saved or sent but as the user asks.
+// A neighbour that is no contact's and sent no card is only a routing id: it can be neither
+// messaged nor added, which the list says under them, and tapping one says why.
 
 import SwiftUI
 import TernKit
@@ -11,6 +13,8 @@ import TernKit
 struct NearbySections: View {
     @EnvironmentObject private var model: NodeModel
     @Binding var adding: Card?
+    /// The routing id of the heard-only node tapped, while its explanation shows.
+    @State private var unknown: UInt32?
 
     var body: some View {
         let cards = model.speaksCards ? model.cardsHeard : []
@@ -41,6 +45,19 @@ struct NearbySections: View {
                 ForEach(bare, id: \.routingId) { n in neighbourRow(n) }
             } header: {
                 Text(cards.isEmpty ? "Heard by your node" : "Heard, no card")
+            } footer: {
+                // Why the ones that are only an id can't be messaged or added, and how to reach them.
+                if bare.contains(where: { model.records.contact(routingId: $0.routingId) == nil }) {
+                    Text(Words.heardOnly(cards: model.speaksCards, one: false))
+                }
+            }
+            .alert(
+                unknown.map(Words.routingId) ?? "",
+                isPresented: Binding(get: { unknown != nil }, set: { if !$0 { unknown = nil } })
+            ) {
+                Button("OK", role: .cancel) { unknown = nil }
+            } message: {
+                Text(Words.heardOnly(cards: model.speaksCards, one: true))
             }
         }
     }
@@ -76,7 +93,8 @@ struct NearbySections: View {
                     if let name {
                         Text(name).fontWeight(.semibold)
                     } else {
-                        Text(Words.routingId(n.routingId)).font(.body.monospaced())
+                        // Only a routing id: muted, as a row there is nothing to do with.
+                        Text(Words.routingId(n.routingId)).font(.body.monospaced()).foregroundStyle(.secondary)
                     }
                     if contact != nil { Tag("Contact", tint: .good) }
                 }
@@ -90,7 +108,15 @@ struct NearbySections: View {
         if let contact {
             NavigationLink(value: Peer.contact(contact)) { row }
         } else {
-            row
+            // Nothing to open: tapping says why, and how to reach its owner.
+            Button {
+                unknown = n.routingId
+            } label: {
+                row.contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(Color.primary)
+            .accessibilityHint("Explains why it can't be messaged or added")
         }
     }
 }

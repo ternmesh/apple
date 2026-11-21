@@ -90,4 +90,23 @@ final class CardsTests: XCTestCase {
         XCTAssertEqual(Words.ago(60), "1 min ago")
         XCTAssertEqual(Words.ago(7200), "2 h ago")
     }
+
+    func testSavingANameWhileTheCardIsOffTurnsItOn() {
+        // What was reported: a name set, the card still off. Saving now sends the name, then cards on.
+        XCTAssertEqual(Card.requests(on: false, saved: "", typed: " Hilltop ", turnOn: true), [.cardName("Hilltop"), .cards(1)])
+        XCTAssertEqual(Card.requests(on: false, saved: "Hilltop", typed: "Hilltop", turnOn: true), [.cards(1)])
+        // On already: only the name, and nothing when it is the same.
+        XCTAssertEqual(Card.requests(on: true, saved: "Hilltop", typed: "Ridge", turnOn: true), [.cardName("Ridge")])
+        XCTAssertEqual(Card.requests(on: true, saved: "Hilltop", typed: "Hilltop", turnOn: true), [])
+        XCTAssertEqual(Card.requests(on: true, saved: "Hilltop", typed: "  ", turnOn: false), [.cardName("")])
+    }
+
+    func testANodeHeardWithNoCardSaysWhyNothingCanBeDone() {
+        XCTAssertTrue(Words.heardOnly(cards: true, one: false).hasPrefix("Your node hears these, but they haven't shared a card"))
+        XCTAssertTrue(Words.heardOnly(cards: true, one: false).contains("link or QR code"))
+        XCTAssertTrue(Words.heardOnly(cards: true, one: true).contains("You can't message or add it from here."))
+        // A node too old for cards: waiting for one is no way to meet anyone.
+        XCTAssertFalse(Words.heardOnly(cards: false, one: false).contains("card"))
+        XCTAssertFalse(Words.heardOnly(cards: false, one: true).contains("card"))
+    }
 }
