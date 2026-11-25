@@ -1,4 +1,5 @@
-// The node itself, as a dashboard: its name, link, battery and airtime at the head, then a row for
+// The node itself, as a dashboard: its name, link, battery and airtime at the head, each meter
+// opening its own screen of how it went over time, then a row for
 // each thing about it, each opening a screen of its own: its address to give others, the nodes it
 // hears, its radio, what it shows of itself, its pairing PIN, and its firmware; and, last,
 // switching to another node, turning it off and erasing it. A setting changed here is shown once the node's
@@ -133,8 +134,16 @@ struct NodeView: View {
             }
             if model.records.power != nil || model.records.airtime != nil {
                 HStack(spacing: 10) {
-                    gauge("Battery", value: batteryValue, fraction: batteryFraction, hint: batteryHint)
-                    gauge("Airtime", value: airtimeValue, fraction: airtimeFraction, hint: airtimeHint)
+                    NavigationLink { BatteryView() } label: {
+                        gauge("Battery", value: batteryValue, fraction: batteryFraction, hint: batteryHint)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Shows your node's battery over time")
+                    NavigationLink { AirtimeView() } label: {
+                        gauge("Airtime", value: airtimeValue, fraction: airtimeFraction, hint: airtimeHint)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Shows your node's airtime over time")
                 }
             }
             HStack(spacing: 10) {
@@ -169,9 +178,14 @@ struct NodeView: View {
         return parts.joined(separator: " · ")
     }
 
+    /// A meter on the dashboard's head: what it measures, its value, a bar and a hint. It opens a screen of its own.
     private func gauge(_ label: String, value: String, fraction: Double?, hint: String?) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.caption.weight(.medium)).opacity(0.85)
+            HStack {
+                Text(label).font(.caption.weight(.medium)).opacity(0.85)
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).opacity(0.7)
+            }
             Text(value).font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1)
             GeometryReader { g in
                 ZStack(alignment: .leading) {
@@ -185,6 +199,7 @@ struct NodeView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.13)))
+        .contentShape(Rectangle())
     }
 
     private func heroButton(_ title: String, symbol: String) -> some View {
