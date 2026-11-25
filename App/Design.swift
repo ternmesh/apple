@@ -1,6 +1,7 @@
 // The pieces the screens share: Tern's colours beyond the accent, avatars, signal bars, the
-// node's status pill, and the tinted squares beside a setting. The accent itself, the teal of the
-// icon and ternmesh.org, is AccentColor in the asset catalog.
+// node's status pill, the tinted squares beside a setting, the teal card at the head of a screen
+// with its buttons and status line, a choice of several, and the address on such a card. The
+// accent itself, the teal of the icon and ternmesh.org, is AccentColor in the asset catalog.
 
 import SwiftUI
 import TernKit
@@ -43,6 +44,9 @@ extension Color {
     /// The node's card on its dashboard, top to bottom.
     static let heroTop = Color(light: 0x0B4F6C, dark: 0x1C5F7D)
     static let heroBottom = Color(light: 0x07364A, dark: 0x103C50)
+    /// The status dot on that card, light enough to read on its teal: going well, and wanting attention.
+    static let heroGood = Color(hex: 0x9FF0C6)
+    static let heroWarn = Color(hex: 0xFFD08A)
 }
 
 private let avatarHues: [UInt32] = [0x0B4F6C, 0x0F766E, 0x7C3AED, 0xC2410C, 0xB45309, 0xBE185D, 0x4D7C0F, 0x1D4ED8]
@@ -185,18 +189,26 @@ struct IconTile: View {
     }
 }
 
-/// A row that opens a screen: a tile, a name, and what it is set to now.
+/// A row that opens a screen: a tile, a name, what it is if that needs saying, and what it is set to now.
 struct SettingRow: View {
     let title: String
     let symbol: String
     let tint: Color
+    var subtitle: String?
     var value: String?
     var valueColor: Color = .secondary
 
     var body: some View {
         HStack(spacing: 12) {
             IconTile(symbol: symbol, tint: tint)
-            Text(title)
+            if let subtitle {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    Text(subtitle).font(.footnote).foregroundStyle(.secondary)
+                }
+            } else {
+                Text(title)
+            }
             Spacer()
             if let value {
                 Text(value).foregroundStyle(valueColor).lineLimit(1)
@@ -222,6 +234,145 @@ struct Tag: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(RoundedRectangle(cornerRadius: 5).fill(tint.opacity(0.14)))
+    }
+}
+
+/// One choice of several in a group: a radio button, its name with a tag beside it if it has one,
+/// and what it means under it.
+struct ChoiceRow: View {
+    let title: String
+    var tag: String?
+    let detail: String
+    let selected: Bool
+    let choose: () -> Void
+
+    var body: some View {
+        Button(action: choose) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text(title).fontWeight(.semibold)
+                        if let tag { Tag(tag) }
+                    }
+                    Text(detail).font(.footnote).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+// MARK: The hero card
+
+/// The card at the head of a screen, on the dashboard's teal: the node's dashboard, a reading, the
+/// address, a trace and a range test each lead with one, so that what a screen is about is found
+/// first. It is a row of a form standing on its own, without the form's background or insets.
+struct HeroCard<Content: View>: View {
+    private let alignment: HorizontalAlignment
+    private let spacing: CGFloat
+    private let content: Content
+
+    init(alignment: HorizontalAlignment = .leading, spacing: CGFloat = 14, @ViewBuilder content: () -> Content) {
+        self.alignment = alignment
+        self.spacing = spacing
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: alignment, spacing: spacing) { content }
+            .foregroundStyle(.white)
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: Alignment(horizontal: alignment, vertical: .center))
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(LinearGradient(colors: [.heroTop, .heroBottom], startPoint: .topLeading, endPoint: .bottomTrailing)))
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
+    }
+}
+
+/// The face of a button on a hero card: a symbol and a word on a lighter wash of the card's own
+/// colour, as wide as it is given. It is the label of a button, link or share in the plain style.
+struct HeroButton: View {
+    let title: String
+    let symbol: String?
+    @Environment(\.isEnabled) private var enabled
+
+    init(_ title: String, symbol: String? = nil) {
+        self.title = title
+        self.symbol = symbol
+    }
+
+    var body: some View {
+        Group {
+            if let symbol { Label(title, systemImage: symbol) } else { Text(title) }
+        }
+        .font(.subheadline.weight(.semibold))
+        .lineLimit(1)
+        .opacity(enabled ? 1 : 0.5)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(enabled ? 0.18 : 0.08)))
+        .contentShape(Rectangle())
+    }
+}
+
+/// A status line on a hero card: a dot coloured for how it is going, and what it is doing.
+struct HeroStatus: View {
+    let text: String
+    let good: Bool
+    var lineLimit: Int?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(good ? Color.heroGood : Color.heroWarn).frame(width: 8, height: 8)
+            Text(text).font(.footnote).opacity(0.85).lineLimit(lineLimit)
+        }
+    }
+}
+
+/// A node's address on a hero card: its name, the QR code of its link on a white tile, and the
+/// short code to read out, over a row of the buttons given.
+struct AddressHero<Buttons: View>: View {
+    let name: String
+    let address: Address
+    private let buttons: Buttons
+
+    init(name: String, address: Address, @ViewBuilder buttons: () -> Buttons) {
+        self.name = name
+        self.address = address
+        self.buttons = buttons()
+    }
+
+    var body: some View {
+        HeroCard(alignment: .center, spacing: 0) {
+            Text(name).font(.headline).lineLimit(1)
+            // Black on white whatever the appearance, as QRCodeView is, on a tile of its own.
+            QRCodeView(address: address)
+                .frame(maxWidth: 200)
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color.white))
+                .padding(.top, 14)
+            Text("Short code")
+                .font(.caption.weight(.semibold))
+                .textCase(.uppercase)
+                .opacity(0.85)
+                .padding(.top, 16)
+            Text(Sharing.shortCode(address))
+                .font(.title.monospaced().weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .textSelection(.enabled)
+                .padding(.top, 2)
+            HStack(spacing: 10) { buttons }
+                .padding(.top, 16)
+        }
     }
 }
 

@@ -72,12 +72,17 @@ struct TraceView: View {
         let ready = model.isReady && model.speaksRoutes
         Form {
             SwiftUI.Section {
-                if !model.speaksRoutes {
-                    Text(RouteWords.needsUpdate).foregroundStyle(.secondary)
-                } else {
-                    status(run, target: target)
-                    Button(run == nil ? "Trace" : "Trace Again") { model.trace(to) }
-                        .disabled(!ready || run?.isRunning == true)
+                HeroCard(spacing: 0) {
+                    Text(target).font(.title2.weight(.semibold)).lineLimit(1)
+                    if !model.speaksRoutes {
+                        HeroStatus(text: RouteWords.needsUpdate, good: false).padding(.top, 6)
+                    } else {
+                        status(run, target: target)
+                        Button { model.trace(to) } label: { HeroButton(run == nil ? "Trace" : "Trace Again", symbol: "waveform.path.ecg") }
+                            .buttonStyle(.plain)
+                            .disabled(!ready || run?.isRunning == true)
+                            .padding(.top, 16)
+                    }
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
@@ -123,23 +128,27 @@ struct TraceView: View {
         if model.traces[to]?.isRunning != true { model.trace(to) }
     }
 
+    /// How the trace goes, on the head card: where it is while out, and how it ended, with its hops
+    /// and round trip once answered.
     @ViewBuilder
     private func status(_ run: TraceRun?, target: String) -> some View {
         if let run {
             if run.isRunning {
                 HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text(RouteWords.step(run))
+                    ProgressView().controlSize(.small).tint(.white)
+                    Text(RouteWords.step(run)).font(.subheadline).opacity(0.9)
                 }
+                .padding(.top, 6)
             } else if let failed = run.failed {
-                Text("Not traced: \(Words.failure(failed))").foregroundStyle(.red)
+                HeroStatus(text: "Not traced: \(Words.failure(failed))", good: false).padding(.top, 6)
             } else if let traced = run.traced {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(RouteWords.result(traced, target: target, records: model.records, names: model.routeNames))
-                        .font(.headline)
-                    if traced.wasAnswered {
-                        Text(RouteWords.summary(traced)).font(.subheadline).foregroundStyle(.secondary)
-                    }
+                HeroStatus(
+                    text: RouteWords.result(traced, target: target, records: model.records, names: model.routeNames),
+                    good: traced.wasAnswered
+                )
+                .padding(.top, 6)
+                if traced.wasAnswered {
+                    Text(RouteWords.summary(traced)).font(.headline).padding(.top, 10)
                 }
             }
         }
@@ -264,64 +273,100 @@ struct RangeTestView: View {
         let logged = !(range?.pings.isEmpty ?? true)
         let rows = range?.rows(model.records) ?? []
         let names = model.routeNames
+        let name = to.map { model.records.name(of: .contact($0)) }
+        let tally = RangeTest.tally(rows)
         Form {
             SwiftUI.Section {
-                Picker("To", selection: Binding(get: { to }, set: { chosen = $0 })) {
-                    if to == nil { Text("Choose a contact").tag(Address?.none) }
-                    ForEach(choices(to), id: \.self) { a in
-                        Text(model.records.name(of: .contact(a))).tag(Address?.some(a))
+                HeroCard(spacing: 0) {
+                    Text(logged || running ? "Delivered: \(tally.delivered) of \(tally.sent)" : "Ready")
+                        .font(.title2.weight(.semibold))
+                        .monospacedDigit()
+                    HeroStatus(
+                        text: running ? "Running: next in \(max(0, Int(((range?.nextAt ?? 0) - now.timeIntervalSince1970).rounded(.up)))) s"
+                            : logged ? "Stopped"
+                            : name.map { "To \($0), when you start" } ?? "Choose a contact",
+                        good: running || (to != nil && !logged)
+                    )
+                    .monospacedDigit()
+                    .padding(.top, 6)
+                    if logged && tally.sent > 0 {
+                        GeometryReader { g in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Color.white.opacity(0.25))
+                                Capsule().fill(Color.white)
+                                    .frame(width: g.size.width * Double(tally.delivered) / Double(tally.sent))
+                            }
+                        }
+                        .frame(height: 6)
+                        .padding(.top, 14)
+                        .accessibilityHidden(true)
                     }
-                }
-                .disabled(running)
-                VStack(alignment: .leading) {
-                    Text("Every \(Int(seconds)) s")
-                    Slider(value: $seconds, in: RangeTest.intervals, step: 5)
-                }
-                .disabled(running)
-            } footer: {
-                Text("Sends \(to.map { model.records.name(of: .contact($0)) } ?? "a contact") a numbered message every so "
-                    + "often, and logs each: where this \(deviceWord) was, whether it was delivered and how. Keep this screen "
-                    + "open while you move" + (isPhone ? "; the screen stays on." : "."))
-            }
-            SwiftUI.Section {
-                if running {
-                    Button("Stop") { model.stopRangeTest() }
-                } else {
-                    Button("Start") { if let to { model.startRangeTest(to: to, interval: seconds) } }
-                        .disabled(to == nil || !model.isConnected)
-                }
-                if logged { Button("Export CSV…") { export() } }
-            } footer: {
-                VStack(alignment: .leading, spacing: 6) {
-                    if logged || running {
-                        let tally = RangeTest.tally(rows)
-                        Text([
-                            running ? "Running: next in \(max(0, Int(((range?.nextAt ?? 0) - now.timeIntervalSince1970).rounded(.up)))) s"
-                                : "Stopped",
-                            "Delivered: \(tally.delivered) of \(tally.sent)",
-                        ].joined(separator: " · "))
-                        .fontWeight(.semibold)
-                    }
-                    if !model.rangeCanLocate {
-                        HStack {
-                            Text("No location: the log won't say where you were.")
-                            Button("Allow Location") { model.allowRangeLocation() }.buttonStyle(.borderless)
+                    HStack(spacing: 10) {
+                        if running {
+                            Button { model.stopRangeTest() } label: { HeroButton("Stop", symbol: "stop.fill") }
+                                .buttonStyle(.plain)
+                        } else {
+                            Button { if let to { model.startRangeTest(to: to, interval: seconds) } } label: {
+                                HeroButton("Start", symbol: "paperplane")
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(to == nil || !model.isConnected)
+                        }
+                        if logged {
+                            Button { export() } label: { HeroButton("Export CSV…", symbol: "square.and.arrow.up") }
+                                .buttonStyle(.plain)
                         }
                     }
+                    .padding(.top, 16)
+                }
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Sends \(name ?? "a contact") a numbered message every so "
+                        + "often, and logs each: where this \(deviceWord) was, whether it was delivered and how. Keep this screen "
+                        + "open while you move" + (isPhone ? "; the screen stays on." : "."))
                     if model.agreed != nil && !model.speaksRoutes {
                         Text("This node's firmware says only whether each was delivered. Update it for hops, signal and round trip.")
                     }
                 }
             }
+            SwiftUI.Section("Test") {
+                Picker(selection: Binding(get: { to }, set: { chosen = $0 })) {
+                    if to == nil { Text("Choose a contact").tag(Address?.none) }
+                    ForEach(choices(to), id: \.self) { a in
+                        Text(model.records.name(of: .contact(a))).tag(Address?.some(a))
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        IconTile(symbol: "person.2", tint: Color(hex: 0x1D4ED8))
+                        Text("To")
+                    }
+                }
+                .disabled(running)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 12) {
+                        IconTile(symbol: "waveform.path.ecg", tint: Color(hex: 0x0F766E))
+                        Text("Every \(Int(seconds)) s").monospacedDigit()
+                    }
+                    Slider(value: $seconds, in: RangeTest.intervals, step: 5)
+                        .padding(.leading, 40)
+                }
+                .disabled(running)
+            }
+            if !model.rangeCanLocate {
+                SwiftUI.Section {
+                    Button { model.allowRangeLocation() } label: {
+                        SettingRow(
+                            title: "Allow Location", symbol: "location", tint: .warn,
+                            subtitle: "No location: the log won't say where you were.")
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
             if !rows.isEmpty {
                 SwiftUI.Section("Log") {
                     ForEach(rows.reversed()) { row in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("#\(row.ping.n) · \(Date(timeIntervalSince1970: row.ping.at).formatted(date: .omitted, time: .standard))")
-                                .font(.subheadline.weight(.semibold))
-                            Text(RouteWords.rangeRow(row, names: names)).font(.subheadline)
-                            Text(fixText(row.ping.fix)).font(.caption).foregroundStyle(.secondary)
-                        }
+                        PingRow(row: row, text: RouteWords.rangeRow(row, names: names), fix: fixText(row.ping.fix))
                     }
                 }
             }
@@ -425,4 +470,42 @@ struct RangeTestView: View {
         top.present(sheet, animated: true)
     }
     #endif
+}
+
+/// One ping of the range test's log: its number on a badge coloured for what became of it, what
+/// became of it and when it went, and where the phone was.
+private struct PingRow: View {
+    let row: RangeRow
+    let text: String
+    let fix: String
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Text("\(row.ping.n)")
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .foregroundStyle(hue)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(hue.opacity(0.14)))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(text).font(.subheadline.weight(.medium))
+                    Spacer(minLength: 8)
+                    Text(Date(timeIntervalSince1970: row.ping.at).formatted(date: .omitted, time: .standard))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(fix).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var hue: Color {
+        if row.isDelivered { return .good }
+        if row.ping.unsent != nil || row.state == MessageState.notDelivered { return .red }
+        return .secondary
+    }
 }

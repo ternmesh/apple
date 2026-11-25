@@ -1,5 +1,6 @@
-// Finding a node and connecting to it: Bluetooth's own states, the one the app is connected to
-// or trying to be, the others it has used, and the nodes nearby. Disconnecting keeps a node;
+// Finding a node and connecting to it: a head card saying what stands in the way, Bluetooth's own
+// states, or how the looking goes; the node the app is connected to or trying to be, the others it
+// has used, and the nodes nearby. Disconnecting keeps a node;
 // forgetting it deletes what the app kept of it.
 
 import SwiftUI
@@ -20,25 +21,27 @@ struct ConnectView: View {
 
     private var content: some View {
         List {
-            SwiftUI.Section("Status") {
-                // Looking for other nodes while disconnected: what matters is that the app is off its own.
-                Text(words(
-                    model.disconnected && model.linkState == .scanning ? .disconnected : model.linkState,
-                    turnedOff: model.turnedOff))
-                    .foregroundStyle(isFailure ? Color.red : Color.primary)
-                if case .failed = model.linkState {
+            SwiftUI.Section {
+                hero
+            }
+
+            if case .failed = model.linkState {
+                SwiftUI.Section {
+                    Text(words(model.linkState, turnedOff: model.turnedOff))
+                        .foregroundStyle(Color.red)
                     Button("Try Again") { model.retry() }
                 }
-                #if os(iOS)
-                if model.linkState == .unauthorized, let url = URL(string: UIApplication.openSettingsURLString) {
-                    Link("Open Settings", destination: url)
-                }
-                #endif
+                .listRowBackground(Color.red.opacity(0.12))
             }
 
             if let id = model.remembered {
                 SwiftUI.Section("This node") {
-                    LabeledContent("Name", value: model.nodeName ?? "Tern node")
+                    // Looking for other nodes while disconnected: what matters is that the app is off its own.
+                    SettingRow(
+                        title: model.nodeName ?? "Tern node", symbol: "antenna.radiowaves.left.and.right", tint: .heroTop,
+                        subtitle: words(
+                            model.disconnected && model.linkState == .scanning ? .disconnected : model.linkState,
+                            turnedOff: model.turnedOff))
                     if let node = model.thisNode, node.label != nil {
                         LabeledContent("Bluetooth name", value: node.name)
                     }
@@ -67,14 +70,10 @@ struct ConnectView: View {
                             Button {
                                 model.connect(to: node.id, name: node.name)
                             } label: {
-                                VStack(alignment: .leading) {
-                                    Text(node.shown)
-                                    if model.found.contains(where: { $0.id == node.id }) {
-                                        Text("Nearby").font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
+                                SettingRow(
+                                    title: node.shown, symbol: "antenna.radiowaves.left.and.right", tint: .heroTop,
+                                    subtitle: model.found.contains(where: { $0.id == node.id }) ? "Nearby" : nil)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             Button(role: .destructive) {
@@ -89,28 +88,20 @@ struct ConnectView: View {
             }
 
             SwiftUI.Section {
-                let nearby = model.found.filter { f in !model.known.contains { $0.id == f.id } }
-                if nearby.isEmpty {
-                    Text(canScan ? "Looking for nodes nearby…" : "Turn Bluetooth on to look for nodes.")
-                        .foregroundStyle(.secondary)
-                }
                 ForEach(nearby) { node in
                     Button {
                         model.connect(to: node)
                     } label: {
-                        HStack {
-                            Text(node.name)
-                            Spacer()
-                            Text("\(node.rssi) dBm")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        .contentShape(Rectangle())
+                        SettingRow(
+                            title: node.name, symbol: "waveform.path.ecg", tint: Color(hex: 0x0F766E),
+                            value: "\(node.rssi) dBm")
+                            .monospacedDigit()
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
             } header: {
-                Text("Other nodes nearby")
+                if !nearby.isEmpty { Text("Other nodes nearby") }
             } footer: {
                 Text("The first time, the system asks for a PIN: the one the node shows on its screen, or the one set on it. "
                     + "A node without a screen uses \(Companion.screenlessPasskey) until you set your own.")
@@ -132,12 +123,50 @@ struct ConnectView: View {
         }
     }
 
-    private var isFailure: Bool {
-        if case .failed = model.linkState { return true }
-        return [.unsupported, .unauthorized, .poweredOff].contains(model.linkState)
+    /// The nodes nearby the app has not used before.
+    private var nearby: [FoundNode] { model.found.filter { f in !model.known.contains { $0.id == f.id } } }
+
+    /// The head of the screen: what stands in the way of looking for nodes, Bluetooth missing, not
+    /// allowed or off, or else how the looking goes.
+    private var hero: some View {
+        HeroCard(spacing: 16) {
+            switch model.linkState {
+            case .unsupported:
+                heading("No Bluetooth", symbol: "exclamationmark.triangle", text: words(.unsupported))
+            case .unauthorized:
+                heading("Bluetooth not allowed", symbol: "lock", text: words(.unauthorized))
+                #if os(iOS)
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    Link(destination: url) { HeroButton("Open Settings", symbol: "gear") }
+                        .buttonStyle(.plain)
+                }
+                #endif
+            case .poweredOff:
+                heading("Bluetooth is off", symbol: "power", text: "Turn Bluetooth on to look for nodes.")
+            case .starting:
+                heading(words(.starting), symbol: "antenna.radiowaves.left.and.right", text: nil)
+            default:
+                heading(
+                    words(.scanning), symbol: "waveform.path.ecg",
+                    text: nearby.isEmpty ? "No other nodes found yet. Make sure yours is on and nearby."
+                        : nearby.count == 1 ? "1 other node found nearby." : "\(nearby.count) other nodes found nearby.")
+            }
+        }
     }
 
-    private var canScan: Bool {
-        ![.unsupported, .unauthorized, .poweredOff, .starting].contains(model.linkState)
+    /// What the head card says: a symbol on a tile, a title, and why.
+    private func heading(_ title: String, symbol: String, text: String?) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: symbol)
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.18)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                if let text { Text(text).font(.subheadline).opacity(0.85) }
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
