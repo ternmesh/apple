@@ -9,7 +9,8 @@ What the app is, and why it is native, is in
 [decisions/phone-apps.md](https://github.com/ternmesh/spec/blob/main/decisions/phone-apps.md).
 It finds a node over Bluetooth LE, pairs with it by passkey, and from then on keeps it connected
 whenever it is in range, in the background too: chats with contacts and groups, invites, contacts
-and the addresses the node refused, who is about, the node's battery, airtime, neighbours and
+and the addresses the node refused, who is about, the node's battery and airtime (with a chart of
+each over the past week, as this device heard them), its neighbours and
 settings, its presence card and satellite receiver, where the node is, positions shared with the node on a map and sharing the user's own,
 updates to its firmware from [ternmesh.org](https://ternmesh.org/firmware/), checked against Tern's
 release keys, turning the node off, and erasing it.

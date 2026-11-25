@@ -110,6 +110,9 @@ final class NodeModel: ObservableObject {
     @Published private(set) var linkState: BluetoothLink.State = .starting {
         didSet {
             if linkState != .ready { syncedOnThisLink = false }
+            // The link ended: a chart draws the last battery and airtime up to now, and no further.
+            let wasConnected = oldValue == .ready || oldValue == .syncing
+            if wasConnected && !isConnected { readings = readings.ended(at: Self.nowMs) }
             feedPosition()
         }
     }
@@ -136,6 +139,8 @@ final class NodeModel: ObservableObject {
             }
         }
     }
+    /// The node's battery and airtime as this device heard them over time, for their screens' charts; kept on disk.
+    @Published private(set) var readings = Readings()
     @Published private(set) var conversations: [Conversation] = []
     /// The contacts' names by routing id, for neighbours and group members, as the node's version
     /// makes routing ids (`Records.routingId(of:)`).
@@ -291,6 +296,7 @@ final class NodeModel: ObservableObject {
         if let id = remembered, let node = known.first(where: { $0.id == id }) { nodeName = node.shown }
         if let id = link.remembered {
             records = Self.load(id)
+            readings = Self.loadReadings(id)
             outgoing = Self.loadOutgoing(id)
             asked = Self.loadAsked(id)
             owned = Self.loadOwned(id)
@@ -330,10 +336,13 @@ final class NodeModel: ObservableObject {
     /// stay on disk, for when it is chosen again.
     func connect(to id: UUID, name: String) {
         if remembered != id {
+            // Leaving the node before: its battery and airtime were last heard now.
+            readings = readings.ended(at: Self.nowMs)
             save()
             // The node first: what is set below is kept on disk under it.
             remembered = id
             records = Self.load(id)
+            readings = Self.loadReadings(id)
             conversations = records.conversations
             showUnread()
             outgoing = Self.loadOutgoing(id)
@@ -411,6 +420,7 @@ final class NodeModel: ObservableObject {
         nodeName = nil
         UserDefaults.standard.removeObject(forKey: Self.nameKey)
         records = Records()
+        readings = Readings()
         conversations = []
         showUnread()
         outgoing = []
@@ -1647,6 +1657,7 @@ final class NodeModel: ObservableObject {
             default: break
             }
             noteArrival(body)
+            readings = readings.with(body, at: Self.nowMs)
             take()
             scheduleSave()
         case .synced:
@@ -1805,6 +1816,7 @@ final class NodeModel: ObservableObject {
     /// Deletes what the app kept of the node `id`.
     private static func remove(_ id: UUID) {
         try? FileManager.default.removeItem(at: file(id))
+        try? FileManager.default.removeItem(at: readingsFile(id))
         UserDefaults.standard.removeObject(forKey: outgoingKey(id))
         UserDefaults.standard.removeObject(forKey: askedKey(id))
         UserDefaults.standard.removeObject(forKey: ownedKey(id))
@@ -1836,6 +1848,19 @@ final class NodeModel: ObservableObject {
             .appendingPathComponent("Tern", isDirectory: true)
         return dir.appendingPathComponent("\(id.uuidString).records")
     }
+
+    private static func readingsFile(_ id: UUID) -> URL {
+        file(id).deletingPathExtension().appendingPathExtension("readings")
+    }
+
+    private static func loadReadings(_ id: UUID) -> Readings {
+        guard let data = try? Data(contentsOf: readingsFile(id)) else { return Readings() }
+        // Kept by an app that stopped while connected, the last of each had no end: it ends where it was heard.
+        return Readings(decoding: data).ended(at: 0)
+    }
+
+    /// The device's clock, in milliseconds since 1970, as readings are stamped.
+    private static var nowMs: Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 
     private static func load(_ id: UUID) -> Records {
         guard let data = try? Data(contentsOf: file(id)) else { return Records() }
@@ -1928,6 +1953,7 @@ final class NodeModel: ObservableObject {
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? Data(records.encoded()).write(to: url, options: .atomic)
+        try? readings.encoded().write(to: Self.readingsFile(id), options: .atomic)
     }
 
     /// Writes the records a little after news stops arriving, not once for every frame of it.
