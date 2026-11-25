@@ -62,19 +62,11 @@ private struct ReadingHead: View {
     let sub: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HeroCard(spacing: 4) {
             Text(value).font(.largeTitle.weight(.semibold)).monospacedDigit()
             if let line { Text(line).font(.headline).opacity(0.9) }
             if let sub { Text(sub).font(.footnote).opacity(0.8) }
         }
-        .foregroundStyle(.white)
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(LinearGradient(colors: [.heroTop, .heroBottom], startPoint: .topLeading, endPoint: .bottomTrailing)))
-        .listRowInsets(EdgeInsets())
-        .listRowBackground(Color.clear)
     }
 }
 

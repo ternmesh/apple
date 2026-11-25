@@ -52,8 +52,6 @@ struct NodeView: View {
                 SwiftUI.Section {
                     hero
                 }
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
                 pages
                 SwiftUI.Section {
                     Button {
@@ -121,16 +119,12 @@ struct NodeView: View {
     /// The head of the dashboard: the node's name, what the link is doing, its battery and airtime
     /// as meters, and the two things done most often from here, giving its address and connecting.
     private var hero: some View {
-        let on = Color.white
-        return VStack(alignment: .leading, spacing: 14) {
+        HeroCard {
             VStack(alignment: .leading, spacing: 4) {
                 Text(model.nodeName ?? "Tern node")
                     .font(.title2.weight(.semibold))
                     .lineLimit(1)
-                HStack(spacing: 6) {
-                    Circle().fill(model.isConnected ? Color(hex: 0x9FF0C6) : Color(hex: 0xFFD08A)).frame(width: 8, height: 8)
-                    Text(heroLine).font(.footnote).opacity(0.85).lineLimit(1)
-                }
+                HeroStatus(text: heroLine, good: model.isConnected, lineLimit: 1)
             }
             if model.records.power != nil || model.records.airtime != nil {
                 HStack(spacing: 10) {
@@ -151,24 +145,18 @@ struct NodeView: View {
                     NavigationLink {
                         page("My Address") { address(me) }
                     } label: {
-                        heroButton("My Address", symbol: "qrcode")
+                        HeroButton("My Address", symbol: "qrcode")
                     }
                     .buttonStyle(.plain)
                 }
                 if model.disconnected || model.turnedOff {
-                    Button { model.retry() } label: { heroButton("Connect", symbol: "link") }.buttonStyle(.plain)
+                    Button { model.retry() } label: { HeroButton("Connect", symbol: "link") }.buttonStyle(.plain)
                 } else {
-                    Button { model.disconnect() } label: { heroButton("Disconnect", symbol: "personalhotspot.slash") }
+                    Button { model.disconnect() } label: { HeroButton("Disconnect", symbol: "personalhotspot.slash") }
                         .buttonStyle(.plain)
                 }
             }
         }
-        .foregroundStyle(on)
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(LinearGradient(colors: [.heroTop, .heroBottom], startPoint: .topLeading, endPoint: .bottomTrailing)))
     }
 
     private var heroLine: String {
@@ -200,15 +188,6 @@ struct NodeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.13)))
         .contentShape(Rectangle())
-    }
-
-    private func heroButton(_ title: String, symbol: String) -> some View {
-        Label(title, systemImage: symbol)
-            .font(.subheadline.weight(.semibold))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.18)))
-            .contentShape(Rectangle())
     }
 
     private var batteryValue: String {
@@ -387,32 +366,26 @@ struct NodeView: View {
         }
     }
 
-    /// The node's address: its QR code to scan, the short code to read out, and the link to send.
+    /// The node's address: on the head card, its QR code to scan, the short code to read out, and
+    /// the link to send; then how each is used, and the address in full.
     @ViewBuilder
     private func address(_ me: NodeSelf) -> some View {
         SwiftUI.Section {
-            QRCodeView(address: me.address)
-                .frame(maxWidth: .infinity)
-        } footer: {
-            Text("Someone with Tern scans the code to add you as a contact; a phone without it opens a page on "
-                + "ternmesh.org that shows the address.")
-        }
-        SwiftUI.Section {
-            Text(Sharing.shortCode(me.address))
-                .font(.title.monospaced().weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .textSelection(.enabled)
-            HStack {
-                ShareLink(item: Sharing.tappableLink(me.address)) { Label("Share Link", systemImage: "square.and.arrow.up") }
-                    .buttonStyle(.borderedProminent)
-                Button { copyToClipboard(Sharing.text(me.address)) } label: { Label("Copy", systemImage: "doc.on.doc") }
-                    .buttonStyle(.bordered)
+            AddressHero(name: model.nodeName ?? "Tern node", address: me.address) {
+                ShareLink(item: Sharing.tappableLink(me.address)) { HeroButton("Share Link", symbol: "square.and.arrow.up") }
+                    .buttonStyle(.plain)
+                Button { copyToClipboard(Sharing.text(me.address)) } label: { HeroButton("Copy", symbol: "doc.on.doc") }
+                    .buttonStyle(.plain)
             }
-            .frame(maxWidth: .infinity)
-        } header: {
-            Text("Short code")
-        } footer: {
-            Text("Read this out to someone adding you: the code their phone shows should be the same.")
+        }
+        SwiftUI.Section("How others add you") {
+            SettingRow(
+                title: "Scan the Code", symbol: "qrcode", tint: Color(hex: 0x1D4ED8),
+                subtitle: "Someone with Tern scans the code to add you as a contact; a phone without it opens a page on "
+                    + "ternmesh.org that shows the address.")
+            SettingRow(
+                title: "Read Out the Short Code", symbol: "text.bubble", tint: Color(hex: 0x0F766E),
+                subtitle: "Read this out to someone adding you: the code their phone shows should be the same.")
         }
         SwiftUI.Section("Full address") {
             Text(Sharing.grouped(me.address))
@@ -479,25 +452,9 @@ struct NodeView: View {
     }
 
     private func roleChoice(_ title: String, tag: String, role: UInt8, current: UInt8, detail: String) -> some View {
-        Button {
+        ChoiceRow(title: title, tag: tag, detail: detail, selected: role == current) {
             if role != current { model.set(.role(role)) }
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: role == current ? "largecircle.fill.circle" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(role == current ? Color.accentColor : Color.secondary)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Text(title).fontWeight(.semibold)
-                        Tag(tag)
-                    }
-                    Text(detail).font(.footnote).foregroundStyle(.secondary)
-                }
-            }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(role == current ? .isSelected : [])
     }
 
     /// Said while the node's Bluetooth is locked (companion version 17): over Bluetooth it changes
